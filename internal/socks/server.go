@@ -42,7 +42,7 @@ func Serve(_ context.Context, listenAddr string, factory SessionFactory) error {
 
 // noopResolver is a SOCKS5 name resolver that returns the host string verbatim
 // (no DNS lookup). Combined with socks5h:// clients, this keeps DNS off the
-// local machine entirely — it's resolved on the DO exit instead.
+// local machine entirely — it's resolved on the VPS exit instead.
 type noopResolver struct{}
 
 func (noopResolver) Resolve(ctx context.Context, _ string) (context.Context, net.IP, error) {

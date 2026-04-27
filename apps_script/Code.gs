@@ -1,19 +1,19 @@
-// GooseRelayVPN forwarder.
+// GooseRelay forwarder.
 //
 // Apps Script web app deployed as: Execute as: Me, Access: Anyone (or Anyone with Google account).
 // All traffic is AES-GCM encrypted by the client; this script is a dumb pipe
 // and never sees plaintext or holds the key.
 //
 // Wire: client POSTs base64(encrypted batch). We forward the bytes verbatim
-// to DO_URL and return its response body verbatim.
+// to VPS_URL and return its response body verbatim.
 //
-// Replace DO_URL with your DigitalOcean droplet's address before deploying.
+// Replace VPS_URL with your server address before deploying.
 
-const DO_URL = 'http://YOUR.DO.IP:8443/tunnel';
+const VPS_URL = 'http://YOUR.VPS.IP:8443/relay';
 
 function doPost(e) {
   const payload = (e && e.postData && e.postData.contents) || '';
-  const resp = UrlFetchApp.fetch(DO_URL, {
+  const resp = UrlFetchApp.fetch(VPS_URL, {
     method: 'post',
     contentType: 'text/plain',
     payload: payload,
@@ -28,6 +28,6 @@ function doPost(e) {
 
 function doGet() {
   return ContentService
-    .createTextOutput('GooseRelayVPN forwarder OK')
+    .createTextOutput('GooseRelay forwarder OK')
     .setMimeType(ContentService.MimeType.TEXT);
 }

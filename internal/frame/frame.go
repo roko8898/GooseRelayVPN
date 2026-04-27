@@ -22,7 +22,7 @@ const (
 	maxPayloadSize = 10 * 1024 * 1024 // 10MB sanity cap
 )
 
-// Frame is the plaintext message exchanged between client and DO server,
+// Frame is the plaintext message exchanged between client and VPS server,
 // before AES-GCM sealing.
 type Frame struct {
 	SessionID [SessionIDLen]byte

@@ -20,7 +20,7 @@ type Crypto struct {
 }
 
 // NewCryptoFromHexKey parses a 64-char hex string into a 32-byte AES-256 key
-// and constructs a Crypto. The same key must be configured on both client and DO server.
+// and constructs a Crypto. The same key must be configured on both client and VPS server.
 func NewCryptoFromHexKey(hexKey string) (*Crypto, error) {
 	key, err := hex.DecodeString(hexKey)
 	if err != nil {

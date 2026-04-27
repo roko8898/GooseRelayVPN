@@ -1,4 +1,4 @@
-// Package exit implements the DO-side HTTP handler. Apps Script POSTs
+// Package exit implements the VPS-side HTTP handler. Apps Script POSTs
 // AES-encrypted frame batches here; we decrypt, demux by session_id, dial real
 // upstream targets on SYN, pump bytes between net.Conn and session, and
 // long-poll the response so downstream bytes get delivered with low latency.
@@ -63,7 +63,7 @@ const (
 	dialFailureBackoff = 2 * time.Second
 )
 
-// Config is the DO server's configuration.
+// Config is the VPS server's configuration.
 type Config struct {
 	ListenAddr string // "0.0.0.0:8443"
 	AESKeyHex  string // 64-char hex

@@ -8,7 +8,7 @@ A SOCKS5 VPN that tunnels **raw TCP** through a Google Apps Script web app to yo
 
 > **How it works in simple terms:** Your browser/app talks SOCKS5 to this tool on your computer. The tool wraps every TCP byte in AES-GCM frames and posts them through a Google-facing HTTPS connection to a free Apps Script web app you control. The Apps Script forwards those bytes verbatim to your own VPS, which decrypts and opens the real connection. To the firewall/filter it looks like you're just talking to Google.
 
-> ⚠️ **You need a small VPS for the exit server.** Unlike pure-Apps-Script proxies, this project tunnels raw TCP — anything SOCKS5 can carry — so a real `net.Dial` has to happen somewhere. A $4/month DigitalOcean droplet is plenty. In exchange you can tunnel SSH, IMAP, custom protocols, anything — not just HTTP.
+> ⚠️ **You need a small VPS for the exit server.** Unlike pure-Apps-Script proxies, this project tunnels raw TCP — anything SOCKS5 can carry — so a real `net.Dial` has to happen somewhere. A small $4/month VPS is plenty. In exchange you can tunnel SSH, IMAP, custom protocols, anything — not just HTTP.
 
 ## Important Notes
 
@@ -53,7 +53,7 @@ Your application sends TCP bytes through the SOCKS5 listener on your computer. T
 
 ### Step 1: Get an outside-Iran VPS
 
-You need a Linux VPS with a public IP. Any provider works — DigitalOcean, Hetzner, Vultr, etc.
+You need a Linux VPS with a public IP. Any provider works.
 
 ### Step 2: Get the binaries
 
@@ -129,7 +129,7 @@ This is the free Google-side piece that hides your traffic.
 3. Delete the default code and paste everything from [`apps_script/Code.gs`](apps_script/Code.gs).
 4. Change this line to your VPS IP:
    ```javascript
-   const DO_URL = 'http://YOUR.VPS.IP:8443/tunnel';
+    const VPS_URL = 'http://YOUR.VPS.IP:8443/tunnel';
    ```
 5. Click **Deploy → New deployment** → set type to **Web app**.
 6. Set **Execute as:** Me and **Who has access:** Anyone.
@@ -321,11 +321,11 @@ GooseRelayVPN/
 |---|---|
 | Log says `decode batch: ... base64 ...` | Apps Script returned an HTML page instead of an encrypted batch. Either the deployment in `script_keys` isn't live, or **Who has access** is not set to `Anyone`. Re-deploy (Deploy → **New deployment**) and update `script_keys` in `client_config.json`. |
 | Log says `relay returned HTTP 404 via …` | Same root cause as above — the deployment ID in your config doesn't match a live `/exec`. Re-deploy and update the config. |
-| Log says `relay returned HTTP 500 via …` | Apps Script can't reach `DO_URL`. Check the IP in `Code.gs`, confirm the VPS is up, and confirm inbound TCP/8443 is open. `curl http://your.vps.ip:8443/healthz` should return 200. |
+| Log says `relay returned HTTP 500 via …` | Apps Script can't reach `VPS_URL`. Check the server address in `Code.gs`, confirm the VPS is up, and confirm inbound TCP/8443 is open. `curl http://your.vps.ip:8443/healthz` should return 200. |
 | Log says `relay request failed via …: timeout` | Fronted connection to Google is failing. Try a different `google_host` — any 216.239.x.120 served by Google works. |
 | Browser hangs on every request | You're using `socks5://` instead of `socks5h://`. The non-`h` form resolves DNS locally and the proxy gets called with raw IPs. |
 | `[exit] dial X: ... timeout` on the VPS server logs | The target host blocks datacenter IPs, or your VPS has no outbound connectivity for that port. |
-| Cloudflare-protected sites show captchas | Expected. Your VPS's IP is on a datacenter ASN (DigitalOcean = AS14061), which Cloudflare's bot scoring flags. Not a tunnel bug. |
+| Cloudflare-protected sites show captchas | Expected. Your VPS's IP is on a datacenter ASN, which Cloudflare's bot scoring often flags. Not a tunnel bug. |
 | YouTube buffers a lot at 1080p | Expected. The tunnel adds ~300-800ms per round trip due to Apps Script dispatch overhead. 480p is comfortable. Deploying multiple `script_keys` (see above) helps with sustained throughput. |
 | One deployment hits quota mid-session | If `script_keys` has more than one entry, the client automatically blacklists the failing one for a few seconds and keeps going on the others. With only one entry, browsing stops until the quota resets (10:30 AM Iran time / midnight Pacific). |
 | Mismatched AES keys (`tunnel_key`) | Symptom: client logs no errors but no traffic flows; VPS logs `dial ...` lines never appear. Confirm `tunnel_key` is byte-identical in both configs. |

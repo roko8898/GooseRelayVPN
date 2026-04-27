@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// Server is the DO exit server config.
+// Server is the VPS exit server config.
 type Server struct {
 	ListenAddr string
 	AESKeyHex  string
