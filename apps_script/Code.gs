@@ -5,15 +5,15 @@
 // and never sees plaintext or holds the key.
 //
 // Wire: client POSTs base64(encrypted batch). We forward the bytes verbatim
-// to VPS_URL and return its response body verbatim.
+// to DO_URL and return its response body verbatim.
 //
-// Replace VPS_URL with your server address before deploying.
+// Replace DO_URL with your VPS address before deploying.
 
-const VPS_URL = 'http://YOUR.VPS.IP:8443/relay';
+const DO_URL = 'http://YOUR.DO.IP:8443/tunnel';
 
 function doPost(e) {
   const payload = (e && e.postData && e.postData.contents) || '';
-  const resp = UrlFetchApp.fetch(VPS_URL, {
+  const resp = UrlFetchApp.fetch(DO_URL, {
     method: 'post',
     contentType: 'text/plain',
     payload: payload,
