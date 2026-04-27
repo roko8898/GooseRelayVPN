@@ -31,7 +31,7 @@ clean:
 
 # Local cross-compile dry run, mirroring the GitHub release matrix.
 release-local:
-	@for entry in linux/amd64 linux/arm64 linux/armv7 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do \
+	@for entry in linux/amd64 linux/arm64 linux/armv7 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 android/arm64 android/armv7; do \
 	  os=$${entry%%/*}; rest=$${entry#*/}; \
 	  arch=$${rest%%v*}; arm=$$(echo $$rest | grep -oP '(?<=v)\d' || true); \
 	  plat=$$os-$$arch$$([ -n "$$arm" ] && echo "v$$arm" || true); \
@@ -42,7 +42,9 @@ release-local:
 	  mkdir -p dist/$$client_name dist/$$server_name; \
 	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$$arm $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$client_name/goose-client$$ext ./cmd/client; \
 	  cp client_config.example.json dist/$$client_name/; \
-	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$$arm $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$server_name/goose-server$$ext ./cmd/server; \
-	  cp server_config.example.json dist/$$server_name/; \
+	  if [ "$$os" != "android" ]; then \
+	    CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$$arm $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$server_name/goose-server$$ext ./cmd/server; \
+	    cp server_config.example.json dist/$$server_name/; \
+	  fi; \
 	done
 	@echo "==> done. binaries in dist/"

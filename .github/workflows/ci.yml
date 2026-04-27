@@ -32,6 +32,29 @@ jobs:
           go build ./cmd/client
           go build ./cmd/server
 
+  termux-client-build:
+    name: Termux client build (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: arm64
+          - goarch: arm
+            goarm: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Cross-build Android client
+        env:
+          CGO_ENABLED: '0'
+          GOOS: android
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: go build ./cmd/client
+
   lint:
     name: staticcheck
     runs-on: ubuntu-latest

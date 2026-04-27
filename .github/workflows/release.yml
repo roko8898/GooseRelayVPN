@@ -31,6 +31,11 @@ jobs:
             goarch: amd64
           - goos: darwin
             goarch: arm64
+          - goos: android
+            goarch: arm64
+          - goos: android
+            goarch: arm
+            goarm: 7
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -59,18 +64,24 @@ jobs:
           cp client_config.example.json "dist/$CLIENT_NAME/"
 
           # --- server ---
-          SERVER_NAME="GooseRelayVPN-server-${VERSION}-${PLATFORM}"
-          mkdir -p "dist/$SERVER_NAME"
-          go build -trimpath -ldflags "$LDFLAGS" -o "dist/$SERVER_NAME/goose-server${SUFFIX}" ./cmd/server
-          cp server_config.example.json "dist/$SERVER_NAME/"
+          if [ "$GOOS" != "android" ]; then
+            SERVER_NAME="GooseRelayVPN-server-${VERSION}-${PLATFORM}"
+            mkdir -p "dist/$SERVER_NAME"
+            go build -trimpath -ldflags "$LDFLAGS" -o "dist/$SERVER_NAME/goose-server${SUFFIX}" ./cmd/server
+            cp server_config.example.json "dist/$SERVER_NAME/"
+          fi
 
           cd dist
           if [ "$GOOS" = "windows" ]; then
             zip -r "${CLIENT_NAME}.zip" "$CLIENT_NAME"
-            zip -r "${SERVER_NAME}.zip" "$SERVER_NAME"
+            if [ "$GOOS" != "android" ]; then
+              zip -r "${SERVER_NAME}.zip" "$SERVER_NAME"
+            fi
           else
             tar -czf "${CLIENT_NAME}.tar.gz" "$CLIENT_NAME"
-            tar -czf "${SERVER_NAME}.tar.gz" "$SERVER_NAME"
+            if [ "$GOOS" != "android" ]; then
+              tar -czf "${SERVER_NAME}.tar.gz" "$SERVER_NAME"
+            fi
           fi
           ls -lh
 
