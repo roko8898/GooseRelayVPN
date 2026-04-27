@@ -33,8 +33,7 @@ type clientFile struct {
 	// TLS SNI.
 	SNI string `json:"sni"`
 
-	// Apps Script deployment key only.
-	ScriptKey  string   `json:"script_key"`
+	// Apps Script Deployment IDs (one or more).
 	ScriptKeys []string `json:"script_keys"`
 
 	// Shared AES key (64-char hex).
@@ -127,10 +126,7 @@ func LoadClient(path string) (*Client, error) {
 	googleHost := firstNonEmpty(f.GoogleHost, "216.239.38.120")
 	googlePort := 443
 
-	deploymentIDs := make([]string, 0, 1+len(f.ScriptKeys))
-	if deploymentID := normalizeDeploymentID(f.ScriptKey); deploymentID != "" {
-		deploymentIDs = append(deploymentIDs, deploymentID)
-	}
+	deploymentIDs := make([]string, 0, len(f.ScriptKeys))
 	for _, raw := range f.ScriptKeys {
 		if deploymentID := normalizeDeploymentID(raw); deploymentID != "" {
 			deploymentIDs = append(deploymentIDs, deploymentID)
@@ -138,7 +134,7 @@ func LoadClient(path string) (*Client, error) {
 	}
 	deploymentIDs = dedupeStrings(deploymentIDs)
 	if len(deploymentIDs) == 0 {
-		return nil, fmt.Errorf("config: script_key or script_keys is required")
+		return nil, fmt.Errorf("config: script_keys is required")
 	}
 
 	key := strings.TrimSpace(f.TunnelKey)

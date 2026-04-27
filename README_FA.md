@@ -103,7 +103,7 @@ cp client_config.example.json client_config.json
 cp server_config.example.json   server_config.json
 ```
 
-هر دو را باز کنید و رشته‌ی hex را در فیلد `tunnel_key` (در کلاینت) و `tunnel_key` (در سرور) قرار دهید. مقدار `script_key` را فعلاً خالی بگذارید — بعد از مرحله‌ی ۵ آن را پر می‌کنید.
+هر دو را باز کنید و رشته‌ی hex را در فیلد `tunnel_key` (در کلاینت) و `tunnel_key` (در سرور) قرار دهید. مقدار `script_keys` را فعلاً خالی بگذارید — بعد از مرحله‌ی ۵ آن را پر می‌کنید.
 
 `client_config.json`:
 
@@ -113,8 +113,7 @@ cp server_config.example.json   server_config.json
   "socks_port":  1080,
   "google_host": "216.239.38.120",
   "sni":         "www.google.com",
-  "script_key":  "PASTE_DEPLOYMENT_ID_ONLY",
-  "script_keys": ["OPTIONAL_SECOND_DEPLOYMENT_ID", "OPTIONAL_THIRD_DEPLOYMENT_ID"],
+  "script_keys": ["PASTE_DEPLOYMENT_ID", "OPTIONAL_SECOND_DEPLOYMENT_ID"],
   "tunnel_key":  "PASTE_OUTPUT_OF_GEN_KEY"
 }
 ```
@@ -146,9 +145,9 @@ cp server_config.example.json   server_config.json
    - **Execute as:** Me
    - **Who has access:** Anyone
 8. روی **Deploy** بزنید و Deployment ID را از آدرس `/exec` بردارید (بخشی که بین `/s/` و `/exec` است).
-9. این مقدار را در فیلد `script_key` فایل `client_config.json` paste کنید. اگر چند deployment دارید، بقیه را در `script_keys` قرار دهید.
+9. این مقدار را به آرایه‌ی `script_keys` در فایل `client_config.json` اضافه کنید. اگر بیش از یک deployment ساختید، همه‌ی Deployment IDها را در همین آرایه قرار دهید.
 
-> ⚠️ **ویرایش اسکریپت، نسخه‌ی فعال را به‌روزرسانی نمی‌کند.** هر بار که `Code.gs` را تغییر می‌دهید باید **یک deployment جدید** بسازید و `script_key`/`script_keys` را در کانفیگ کلاینت به‌روزرسانی کنید.
+> ⚠️ **ویرایش اسکریپت، نسخه‌ی فعال را به‌روزرسانی نمی‌کند.** هر بار که `Code.gs` را تغییر می‌دهید باید **یک deployment جدید** بسازید و `script_keys` را در کانفیگ کلاینت به‌روزرسانی کنید.
 
 تست deployment:
 
@@ -215,8 +214,8 @@ curl -x socks5h://127.0.0.1:1080 https://api.ipify.org
 
 ```json
 {
-  "script_key":  "PRIMARY_DEPLOYMENT_ID",
   "script_keys": [
+    "FIRST_DEPLOYMENT_ID",
     "SECOND_DEPLOYMENT_ID",
     "THIRD_DEPLOYMENT_ID"
   ]
@@ -245,8 +244,7 @@ curl -x socks5h://127.0.0.1:1080 https://api.ipify.org
 | `socks_port` | `1080` | پورت SOCKS5 محلی. |
 | `google_host` | `216.239.38.120` | میزبان/IP لبه‌ی گوگل برای اتصال (پورت همیشه `443` است). |
 | `sni` | `www.google.com` | مقدار SNI در handshake TLS. |
-| `script_key` | — | Deployment ID اصلی Apps Script (بدون URL کامل). |
-| `script_keys` | — | Deployment IDهای اضافه برای load balancing سلامت‌محور و پخش quota. |
+| `script_keys` | — | آرایه‌ای از Deployment IDهای Apps Script (بدون URL کامل). حداقل یک ID لازم است؛ افزودن چند ID برای load balancing سلامت‌محور و پخش quota بین چند deployment. |
 | `tunnel_key` | — | کلید AES-256 به‌صورت hex (۶۴ کاراکتر) که باید با سرور یکسان باشد. |
 
 ### سرور (`server_config.json`)
@@ -261,7 +259,7 @@ curl -x socks5h://127.0.0.1:1080 https://api.ipify.org
 
 ## به‌روزرسانی forwarder روی Apps Script
 
-اگر `Code.gs` را تغییر دادید — مثلاً برای تغییر IP دراپلت — باید در ویرایشگر Apps Script یک **deployment جدید** بسازید (Deploy → **New deployment**، نه فقط "Manage deployments"). صرفاً ذخیره کردن کد، نسخه‌ی فعال را عوض نمی‌کند؛ آدرس `/exec` همچنان نسخه‌ی منتشرشده‌ی قبلی را سرو می‌کند. بعد از deploy جدید، `script_key`/`script_keys` را در `client_config.json` به‌روزرسانی کنید.
+اگر `Code.gs` را تغییر دادید — مثلاً برای تغییر IP دراپلت — باید در ویرایشگر Apps Script یک **deployment جدید** بسازید (Deploy → **New deployment**، نه فقط "Manage deployments"). صرفاً ذخیره کردن کد، نسخه‌ی فعال را عوض نمی‌کند؛ آدرس `/exec` همچنان نسخه‌ی منتشرشده‌ی قبلی را سرو می‌کند. بعد از deploy جدید، `script_keys` را در `client_config.json` به‌روزرسانی کنید.
 
 ---
 
@@ -322,7 +320,7 @@ GooseRelayVPN/
 
 | مشکل | راه‌حل |
 |---|---|
-| لاگ می‌گوید `decode batch: ... base64 ...` | Apps Script به‌جای batch رمزشده یک صفحه‌ی HTML برگردانده. یا deployment داخل `script_key`/`script_keys` زنده نیست، یا گزینه‌ی **Who has access** روی `Anyone` تنظیم نشده. یک **deployment جدید** بسازید و `script_key`/`script_keys` را در `client_config.json` به‌روزرسانی کنید. |
+| لاگ می‌گوید `decode batch: ... base64 ...` | Apps Script به‌جای batch رمزشده یک صفحه‌ی HTML برگردانده. یا deployment داخل `script_keys` زنده نیست، یا گزینه‌ی **Who has access** روی `Anyone` تنظیم نشده. یک **deployment جدید** بسازید و `script_keys` را در `client_config.json` به‌روزرسانی کنید. |
 | لاگ می‌گوید `relay returned HTTP 404 via …` | همان مشکل بالا — Deployment ID داخل کانفیگ شما با `/exec` زنده‌ای مطابقت ندارد. دوباره deploy کنید و کانفیگ را به‌روزرسانی کنید. |
 | لاگ می‌گوید `relay returned HTTP 500 via …` | Apps Script نمی‌تواند به `DO_URL` برسد. IP داخل `Code.gs` را چک کنید، اطمینان حاصل کنید VPS بالا است و TCP/8443 ورودی باز است. `curl http://your.vps.ip:8443/healthz` باید 200 برگرداند. |
 | لاگ می‌گوید `relay request failed via …: timeout` | اتصال fronted به گوگل fail می‌شود. یک `google_host` دیگر امتحان کنید — هر 216.239.x.120 که گوگل سرویس می‌دهد کار می‌کند. |
@@ -330,7 +328,7 @@ GooseRelayVPN/
 | `[exit] dial X: ... timeout` در لاگ VPS | مقصد، IPهای دیتاسنتر را بلاک می‌کند یا VPS شما برای آن پورت اتصال خروجی ندارد. |
 | سایت‌های پشت Cloudflare کپچا می‌خواهند | طبیعی است. IP دراپلت شما روی ASN دیتاسنتر است (DigitalOcean = AS14061) و bot scoring کلودفلر آن را علامت می‌زند. این مشکل تونل نیست. |
 | یوتیوب در ۱۰۸۰p بافر می‌کند | طبیعی است. تونل به‌خاطر overhead فراخوانی Apps Script حدود ۳۰۰–۸۰۰ میلی‌ثانیه به هر round trip اضافه می‌کند. کیفیت ۴۸۰p روان است. اضافه کردن چند Deployment ID در `script_keys` (بخش بالا) به throughput پایدار کمک می‌کند. |
-| یک deployment وسط کار به سهمیه می‌رسد | اگر در `script_keys` deploymentهای دیگری دارید، کلاینت به‌صورت خودکار چند ثانیه بلک‌لیستش می‌کند و از بقیه ادامه می‌دهد. اگر فقط یک `script_key` دارید، browsing تا reset سهمیه (~۱۰:۳۰ صبح به وقت ایران / نیمه‌شب Pacific) متوقف می‌ماند. |
+| یک deployment وسط کار به سهمیه می‌رسد | اگر `script_keys` بیش از یک عضو دارد، کلاینت به‌صورت خودکار چند ثانیه بلک‌لیستش می‌کند و از بقیه ادامه می‌دهد. اگر فقط یک عضو دارید، browsing تا reset سهمیه (~۱۰:۳۰ صبح به وقت ایران / نیمه‌شب Pacific) متوقف می‌ماند. |
 | کلیدهای AES (`tunnel_key`) ناهمسان | علامت: کلاینت خطا نمی‌دهد ولی هیچ ترافیکی رد نمی‌شود؛ خطوط `dial ...` در لاگ سرور ظاهر نمی‌شوند. مطمئن شوید مقدار `tunnel_key` در دو کانفیگ بایت‌به‌بایت یکسان است. |
 
 ---

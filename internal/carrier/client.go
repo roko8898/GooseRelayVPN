@@ -201,7 +201,7 @@ func (c *Client) pollOnce(ctx context.Context) bool {
 				log.Printf("[carrier] relay request failed via %s (attempt %d/%d): %v; retrying alternate script", shortScriptKey(scriptURL), attempt, maxAttempts, err)
 				continue
 			}
-			log.Printf("[carrier] relay request failed via %s: %v (check internet access, script_key/script_keys, and google_host)", shortScriptKey(scriptURL), err)
+			log.Printf("[carrier] relay request failed via %s: %v (check internet access, script_keys, and google_host)", shortScriptKey(scriptURL), err)
 			time.Sleep(time.Second) // back off on transport errors
 			return false
 		}

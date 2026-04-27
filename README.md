@@ -103,7 +103,7 @@ cp client_config.example.json client_config.json
 cp server_config.example.json   server_config.json
 ```
 
-Open both and paste the AES hex string into `tunnel_key` (client) and `tunnel_key` (server). Leave `script_key` blank for now - you'll fill it in after Step 5.
+Open both and paste the AES hex string into `tunnel_key` (client) and `tunnel_key` (server). Leave `script_keys` empty for now — you'll fill it in after Step 5.
 
 `client_config.json`:
 
@@ -113,8 +113,7 @@ Open both and paste the AES hex string into `tunnel_key` (client) and `tunnel_ke
   "socks_port":  1080,
   "google_host": "216.239.38.120",
   "sni":         "www.google.com",
-  "script_key":  "PASTE_DEPLOYMENT_ID_ONLY",
-  "script_keys": ["OPTIONAL_SECOND_DEPLOYMENT_ID", "OPTIONAL_THIRD_DEPLOYMENT_ID"],
+  "script_keys": ["PASTE_DEPLOYMENT_ID", "OPTIONAL_SECOND_DEPLOYMENT_ID"],
   "tunnel_key":  "PASTE_OUTPUT_OF_GEN_KEY"
 }
 ```
@@ -146,9 +145,9 @@ This is the dumb pipe that disguises your traffic as Google.
    - **Execute as:** Me
    - **Who has access:** Anyone
 8. Click **Deploy** and copy the deployment ID from the `/exec` URL (the part between `/s/` and `/exec`).
-9. Paste that value into `script_key` in `client_config.json`. If you deploy multiple scripts, put extra IDs in `script_keys`.
+9. Add that value to the `script_keys` array in `client_config.json`. If you deploy more than one script, list all the Deployment IDs in the array.
 
-> ⚠️ **Editing the script doesn't update the live version.** Every time you change `Code.gs` you must create a **new deployment** and update `script_key`/`script_keys` in your client config.
+> ⚠️ **Editing the script doesn't update the live version.** Every time you change `Code.gs` you must create a **new deployment** and update `script_keys` in your client config.
 
 Verify the deployment:
 
@@ -215,8 +214,8 @@ Each Google account's Apps Script deployment is rate-limited to **~20,000 calls/
 
 ```json
 {
-  "script_key":  "PRIMARY_DEPLOYMENT_ID",
   "script_keys": [
+    "FIRST_DEPLOYMENT_ID",
     "SECOND_DEPLOYMENT_ID",
     "THIRD_DEPLOYMENT_ID"
   ]
@@ -245,8 +244,7 @@ What the client does for you automatically:
 | `socks_port` | `1080` | Port for the local SOCKS5 listener. |
 | `google_host` | `216.239.38.120` | Google edge IP/host to dial (port is fixed to `443`). |
 | `sni` | `www.google.com` | SNI presented during TLS handshake. |
-| `script_key` | — | Primary Apps Script deployment ID (no full URL needed). |
-| `script_keys` | — | Optional extra deployment IDs for health-aware load balancing and quota spreading. |
+| `script_keys` | — | Array of Apps Script Deployment IDs (no full URL needed). One ID is required; add more for health-aware load balancing and to spread quota across multiple deployments. |
 | `tunnel_key` | — | 64-char hex AES-256 key. Must match the server byte-for-byte. |
 
 ### Server (`server_config.json`)
@@ -261,7 +259,7 @@ What the client does for you automatically:
 
 ## Updating the Apps Script forwarder
 
-If you change `Code.gs` - for example to point at a new droplet IP - you must create a **new deployment** in the Apps Script editor (Deploy -> **New deployment**, not just "Manage deployments"). Saving alone does nothing; the live `/exec` URL serves the published version. After redeploying, update `script_key`/`script_keys` in `client_config.json`.
+If you change `Code.gs` - for example to point at a new droplet IP - you must create a **new deployment** in the Apps Script editor (Deploy -> **New deployment**, not just "Manage deployments"). Saving alone does nothing; the live `/exec` URL serves the published version. After redeploying, update `script_keys` in `client_config.json`.
 
 ---
 
@@ -322,7 +320,7 @@ GooseRelayVPN/
 
 | Problem | Solution |
 |---|---|
-| Log says `decode batch: ... base64 ...` | Apps Script returned an HTML page instead of an encrypted batch. Either the deployment in `script_key`/`script_keys` isn't live, or **Who has access** is not set to `Anyone`. Re-deploy (Deploy → **New deployment**) and update `script_key`/`script_keys` in `client_config.json`. |
+| Log says `decode batch: ... base64 ...` | Apps Script returned an HTML page instead of an encrypted batch. Either the deployment in `script_keys` isn't live, or **Who has access** is not set to `Anyone`. Re-deploy (Deploy → **New deployment**) and update `script_keys` in `client_config.json`. |
 | Log says `relay returned HTTP 404 via …` | Same root cause as above — the deployment ID in your config doesn't match a live `/exec`. Re-deploy and update the config. |
 | Log says `relay returned HTTP 500 via …` | Apps Script can't reach `DO_URL`. Check the IP in `Code.gs`, confirm the VPS is up, and confirm inbound TCP/8443 is open. `curl http://your.vps.ip:8443/healthz` should return 200. |
 | Log says `relay request failed via …: timeout` | Fronted connection to Google is failing. Try a different `google_host` — any 216.239.x.120 served by Google works. |
@@ -330,7 +328,7 @@ GooseRelayVPN/
 | `[exit] dial X: ... timeout` on the VPS server logs | The target host blocks datacenter IPs, or your VPS has no outbound connectivity for that port. |
 | Cloudflare-protected sites show captchas | Expected. Your VPS's IP is on a datacenter ASN (DigitalOcean = AS14061), which Cloudflare's bot scoring flags. Not a tunnel bug. |
 | YouTube buffers a lot at 1080p | Expected. The tunnel adds ~300-800ms per round trip due to Apps Script dispatch overhead. 480p is comfortable. Deploying multiple `script_keys` (see above) helps with sustained throughput. |
-| One deployment hits quota mid-session | If you have other entries in `script_keys`, the client automatically blacklists the failing one for a few seconds and keeps going on the others. With only one `script_key`, browsing stops until the quota resets (10:30 AM Iran time / midnight Pacific). |
+| One deployment hits quota mid-session | If `script_keys` has more than one entry, the client automatically blacklists the failing one for a few seconds and keeps going on the others. With only one entry, browsing stops until the quota resets (10:30 AM Iran time / midnight Pacific). |
 | Mismatched AES keys (`tunnel_key`) | Symptom: client logs no errors but no traffic flows; VPS logs `dial ...` lines never appear. Confirm `tunnel_key` is byte-identical in both configs. |
 
 ---
