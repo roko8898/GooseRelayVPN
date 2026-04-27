@@ -68,7 +68,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/GooseRelayVPN-*.*
+          path: |
+            dist/GooseRelayVPN-*.tar.gz
+            dist/GooseRelayVPN-*.zip
 
   release:
     name: Publish release
@@ -83,13 +85,14 @@ jobs:
       - name: Generate SHA256SUMS
         run: |
           cd dist
-          sha256sum GooseRelayVPN-* > SHA256SUMS.txt
+          find . -maxdepth 1 -type f -name 'GooseRelayVPN-*' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
           cat SHA256SUMS.txt
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/GooseRelayVPN-*
+            dist/GooseRelayVPN-*.tar.gz
+            dist/GooseRelayVPN-*.zip
             dist/SHA256SUMS.txt
           generate_release_notes: true
         env:
