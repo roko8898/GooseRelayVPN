@@ -138,21 +138,44 @@ This is the free Google-side piece that hides your traffic.
 
 > ⚠️ Every time you edit `Code.gs` you must create a **new deployment** and update `script_keys`.
 
-### Step 6: Install the server on your VPS
+### Step 6:  Keep the server running after reboot (systemd)
 
-SSH into your VPS and run:
+If you want the exit server to start automatically after a VPS reboot, create a systemd service.
 
-```bash
-bash scripts/deploy.sh
-```
-
-Then check it's running:
+Run:
 
 ```bash
-curl http://YOUR.VPS.IP:8443/healthz
+sudo nano /etc/systemd/system/goose-relay.service
 ```
 
-You should get an empty 200 response.
+Paste this (replace paths if your binary/config are elsewhere):
+
+```ini
+[Unit]
+Description=GooseRelayVPN exit server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root
+ExecStart=/root/goose-server-linux -config /root/server_config.json
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then run:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable goose-relay
+sudo systemctl start goose-relay
+sudo systemctl status goose-relay --no-pager
+```
 
 ### Step 7: Run the client
 

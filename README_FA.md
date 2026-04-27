@@ -138,21 +138,44 @@ cp server_config.example.json server_config.json
 
 > ⚠️ هر بار که `Code.gs` را ویرایش کنید باید **یک deployment جدید** بسازید و `script_keys` را آپدیت کنید.
 
-### مرحله ۶: نصب سرور روی VPS
+### مرحله ۶: اجرای خودکار سرور بعد از ریبوت (systemd)
 
-به VPS خود SSH بزنید و این دستور را اجرا کنید:
+اگر می‌خواهید سرور خروجی بعد از ریبوت VPS به‌صورت خودکار بالا بیاید، یک سرویس systemd بسازید.
 
-```bash
-bash scripts/deploy.sh
-```
-
-سپس بررسی کنید که سرور در حال اجرا است:
+این دستور را اجرا کنید:
 
 ```bash
-curl http://YOUR.VPS.IP:8443/healthz
+sudo nano /etc/systemd/system/goose-relay.service
 ```
 
-باید پاسخ ۲۰۰ دریافت کنید.
+این محتوا را قرار دهید (اگر مسیر باینری/کانفیگ شما فرق دارد، اصلاح کنید):
+
+```ini
+[Unit]
+Description=GooseRelayVPN exit server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root
+ExecStart=/root/goose-server-linux -config /root/server_config.json
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+بعد این دستورات را اجرا کنید:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable goose-relay
+sudo systemctl start goose-relay
+sudo systemctl status goose-relay --no-pager
+```
 
 ### مرحله ۷: اجرای کلاینت
 
