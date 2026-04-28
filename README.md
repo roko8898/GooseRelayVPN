@@ -10,11 +10,11 @@ A SOCKS5 VPN that tunnels **raw TCP** through a Google Apps Script web app to yo
 
 > ⚠️ **You need a small VPS for the exit server.** Unlike pure-Apps-Script proxies, this project tunnels raw TCP — anything SOCKS5 can carry — so a real `net.Dial` has to happen somewhere. A small $4/month VPS is plenty. In exchange you can tunnel SSH, IMAP, custom protocols, anything — not just HTTP.
 
-If you like this project, please support it by starring it on GitHub (⭐). It helps the project get discovered.
+## Support This Project
 
----
+If you like this project, please consider starring it on GitHub (⭐). It helps the project get discovered.
 
-## Donate Us
+You can also support the project financially:
 
 - TRX / USDT TRC20:
   `TSxg2WAXYnkoR2UiUTzCxbmqNARAt91aqB`
