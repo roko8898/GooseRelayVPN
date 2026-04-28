@@ -295,7 +295,7 @@ What the client does for you automatically:
 | `socks_port` | `1080` | Port for the local SOCKS5 listener. |
 | `google_host` | `216.239.38.120` | Google edge IP/host to dial (port is fixed to `443`). |
 | `sni` | `www.google.com` | SNI presented during the TLS handshake. Accepts a single string or an array — `["www.google.com", "mail.google.com", "accounts.google.com"]` — where each SNI host gets its own connection and throttle bucket, which can multiply available bandwidth in regions that rate-limit per domain name. |
-| `script_keys` | — | Array of Apps Script Deployment IDs (no full URL needed). One ID is required; add more for health-aware load balancing and to spread quota across multiple deployments. |
+| `script_keys` | — | Array of Apps Script Deployment IDs (no full URL needed). One ID is required; add more to increase both throughput and quota — each additional ID spawns 3 more concurrent poll workers and adds its own ~20,000 req/day quota bucket. |
 | `tunnel_key` | — | 64-char hex AES-256 key. Must match the server byte-for-byte. |
 
 ### Server (`server_config.json`)
@@ -332,7 +332,7 @@ Key invariants:
 - **Authentication = AES-GCM tag.** No shared password, no certificates. Frames that fail `Open()` are dropped silently.
 - **Apps Script never sees plaintext.** The script is a ~30-line forwarder; the AES key lives only on your machine and the VPS.
 - **DNS travels through the tunnel.** The SOCKS5 server uses a no-op resolver; use `socks5h://` so DNS is resolved at the exit, not locally.
-- **Long-poll, full-duplex.** The VPS holds each request open for up to 8s waiting for downstream bytes; the client runs 3 concurrent poll workers so upstream and downstream can be in flight simultaneously. Downstream frames are coalesced in a small (~25 ms) window so streaming workloads send fewer, larger HTTP responses.
+- **Long-poll, full-duplex.** The VPS holds each request open for up to 8s waiting for downstream bytes; the client runs **3 concurrent poll workers per deployment ID** — so 3 script keys = 9 workers, 6 keys = 18 workers. More keys means more parallelism, not just more quota. Downstream frames are coalesced in a small (~25 ms) window so streaming workloads send fewer, larger HTTP responses.
 - **Health-aware multi-deployment.** When `script_keys` lists more than one deployment, the client picks endpoints in round-robin and exponentially blacklists any that misbehave; one same-poll retry is attempted on a fresh deployment so transient failures don't drop traffic.
 
 ### Wire format

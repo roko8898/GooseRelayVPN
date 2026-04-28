@@ -295,7 +295,7 @@ CLIENT  INFO    ready: local SOCKS5 is listening on 127.0.0.1:1080
 | `socks_port` | `1080` | پورت SOCKS5 محلی. |
 | `google_host` | `216.239.38.120` | میزبان/IP لبه گوگل برای اتصال (پورت همیشه `443` است). |
 | `sni` | `www.google.com` | مقدار SNI در TLS. یک رشته یا آرایه می‌پذیرد — `["www.google.com", "mail.google.com", "accounts.google.com"]` — هر SNI اتصال و bucket جداگانه دارد که می‌تواند پهنای باند را در مناطقی که per-domain throttle دارند چند برابر کند. |
-| `script_keys` | — | آرایه Deployment IDهای Apps Script (بدون URL کامل). حداقل یک ID لازم است؛ چند ID برای load balancing سلامت‌محور و پخش quota. |
+| `script_keys` | — | آرایه Deployment IDهای Apps Script (بدون URL کامل). حداقل یک ID لازم است؛ هر ID اضافه هم ۳ worker موازی بیشتر می‌آورد هم ~۲۰٬۰۰۰ درخواست روزانه quota جداگانه. |
 | `tunnel_key` | — | کلید AES-256 به‌صورت hex (۶۴ کاراکتر). باید با سرور یکسان باشد. |
 
 ### سرور (`server_config.json`)
@@ -332,7 +332,7 @@ CLIENT  INFO    ready: local SOCKS5 is listening on 127.0.0.1:1080
 - **احراز هویت = تگ AES-GCM.** هیچ رمز عبور یا گواهی مشترکی نیست. فریم‌هایی که `Open()` آن‌ها fail شود بی‌صدا drop می‌شوند.
 - **Apps Script هرگز متن خام را نمی‌بیند.** اسکریپت یک forwarder ~۳۰ خطی است؛ کلید AES فقط روی کامپیوتر شما و VPS شماست.
 - **DNS از تونل عبور می‌کند.** سرور SOCKS5 از یک resolver خنثی استفاده می‌کند؛ از `socks5h://` استفاده کنید تا DNS در نقطه خروج resolve شود نه محلی.
-- **Long-poll تمام‌دوطرفه.** VPS هر درخواست را تا ۸ ثانیه باز نگه می‌دارد؛ کلاینت ۳ worker موازی دارد تا ارسال و دریافت همزمان باشند. فریم‌های downstream در یک پنجره کوچک (~۲۵ میلی‌ثانیه) coalesce می‌شوند تا برای استریم‌ها HTTP پاسخ‌های کمتر و بزرگ‌تر ساخته شود.
+- **Long-poll تمام‌دوطرفه.** VPS هر درخواست را تا ۸ ثانیه باز نگه می‌دارد؛ کلاینت **۳ worker موازی به ازای هر deployment ID** اجرا می‌کند — یعنی ۳ کلید = ۹ worker، ۶ کلید = ۱۸ worker. اضافه کردن script key بیشتر هم موازی‌کاری را بالا می‌برد هم سهمیه را. فریم‌های downstream در یک پنجره کوچک (~۲۵ میلی‌ثانیه) coalesce می‌شوند تا برای استریم‌ها HTTP پاسخ‌های کمتر و بزرگ‌تر ساخته شود.
 - **چند deployment سلامت‌محور.** وقتی `script_keys` بیش از یک deployment دارد، کلاینت endpointها را round-robin انتخاب می‌کند و هر کدام که بد رفتار کند به‌صورت نمایی blacklist می‌کند؛ یک retry در همان poll روی deployment سالم انجام می‌شود تا خطاهای موقتی ترافیک را drop نکنند.
 
 ### فرمت wire

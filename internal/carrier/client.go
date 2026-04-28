@@ -71,25 +71,11 @@ type relayEndpoint struct {
 	statsFail       uint64
 }
 
-// numPollWorkers is the number of concurrent poll goroutines. Multiple
-// goroutines eliminate head-of-line blocking: while one goroutine is blocked
-// waiting for the server's long-poll response (e.g. CDN data for session 1),
-// the others can immediately send SYNs for sessions 2, 3, 4 that queued up.
-const numPollWorkers = 3
-
-// maxConcurrentIdlePolls limits how many workers may issue an empty poll
-// simultaneously. Empty polls are long-held by the server (LongPollWindow), so
-// if all workers enter them at once, newly queued SYN/data frames must wait
-// for a worker to return, causing 8s/16s latency spikes. Keep one long-poll
-// for downstream push, and leave the rest of workers available for outbound TX.
-// maxConcurrentIdlePollsDownload raises the cap when txReady is empty: in
-// pure-download mode (video, large files) there is no outbound TX to reserve
-// workers for, so all-but-one workers can long-poll concurrently for better
-// downstream throughput.
-const (
-	maxConcurrentIdlePolls         = 1
-	maxConcurrentIdlePollsDownload = numPollWorkers - 1
-)
+// workersPerEndpoint is the number of concurrent poll goroutines spawned for
+// each configured script URL. Total workers = workersPerEndpoint × len(endpoints).
+// Scaling with endpoint count means adding more deployment IDs increases
+// parallelism rather than just spreading the same fixed pool thinner.
+const workersPerEndpoint = 3
 
 // waker is a broadcast notifier: Broadcast() wakes all goroutines currently
 // blocked on C() simultaneously, unlike a buffered chan which only wakes one.
@@ -123,6 +109,7 @@ type Client struct {
 	httpClients []*http.Client  // one per SNI host; round-robined per request
 	nextHTTP    atomic.Uint64   // round-robin index into httpClients
 	debugTiming bool
+	numWorkers  int // workersPerEndpoint × len(endpoints)
 
 	// debugStarts tracks session start times when debugTiming is on so we can
 	// log time-to-first-byte once each session receives its first downstream
@@ -189,6 +176,7 @@ func New(cfg Config) (*Client, error) {
 		aead:        aead,
 		httpClients: NewFrontedClients(cfg.Fronting, pollTimeout),
 		debugTiming: cfg.DebugTiming,
+		numWorkers:  workersPerEndpoint * len(endpoints),
 		sessions:    make(map[[frame.SessionIDLen]byte]*session.Session),
 		inFlight:    make(map[[frame.SessionIDLen]byte]bool),
 		txReady:     make(map[[frame.SessionIDLen]byte]struct{}),
@@ -274,13 +262,13 @@ func (c *Client) Shutdown(ctx context.Context) {
 	_ = resp.Body.Close()
 }
 
-// Run spawns numPollWorkers concurrent poll goroutines and blocks until ctx
-// is canceled. Parallel workers eliminate head-of-line blocking: while one
-// worker waits for a server long-poll response, the others immediately dispatch
-// queued SYNs for new sessions opened at the same time (e.g. YouTube page load).
+// Run spawns c.numWorkers concurrent poll goroutines and blocks until ctx is
+// canceled. Worker count scales with the number of configured endpoints so that
+// adding more script URLs increases parallelism rather than spreading the same
+// fixed pool thinner.
 func (c *Client) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
-	for i := 0; i < numPollWorkers; i++ {
+	for i := 0; i < c.numWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -332,12 +320,14 @@ func (c *Client) pollOnce(ctx context.Context) bool {
 	}
 	isIdlePoll := len(frames) == 0
 	if isIdlePoll {
-		// In pure-download mode (txReady empty) all workers can long-poll
-		// concurrently; there is no TX to reserve a free worker for.
+		// Allow one idle long-poll slot per endpoint so each deployment can push
+		// downstream data concurrently. In pure-download mode (no pending TX)
+		// raise the cap to numWorkers-1 so most workers are long-polling for
+		// higher bulk throughput, reserving one for any TX that arrives.
 		c.mu.Lock()
-		idleCap := maxConcurrentIdlePolls
+		idleCap := len(c.endpoints)
 		if len(c.txReady) == 0 {
-			idleCap = maxConcurrentIdlePollsDownload
+			idleCap = c.numWorkers - 1
 		}
 		c.mu.Unlock()
 		if !c.acquireIdlePollSlot(idleCap) {

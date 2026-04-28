@@ -86,6 +86,17 @@ func (s *Session) Stop() {
 // in sequence order. Running it independently from poll workers means a slow
 // SOCKS reader on one session cannot stall frame delivery for any other session.
 func (s *Session) rxLoop() {
+	defer func() {
+		// Guarantee RxChan is closed when rxLoop exits for any reason (rxDone
+		// fired, FIN processed, or session killed via ProcessRx overflow). This
+		// unblocks any goroutine ranging over RxChan without a separate close call.
+		s.mu.Lock()
+		if !s.rxClosed {
+			s.rxClosed = true
+			close(s.RxChan)
+		}
+		s.mu.Unlock()
+	}()
 	for {
 		select {
 		case f := <-s.rxInbox:
@@ -286,9 +297,9 @@ func (s *Session) drainTx(maxPayload, maxFrames int) []*frame.Frame {
 	return frames
 }
 
-// ProcessRx enqueues f to the per-session rxLoop goroutine and returns
-// immediately. Callers (poll workers) are never blocked by a slow SOCKS reader
-// on this session, and cannot stall delivery to other sessions as a result.
+// ProcessRx enqueues f to the per-session rxLoop goroutine without blocking.
+// If rxInbox is saturated the downstream reader cannot keep up; the session is
+// killed so the poll worker is never stalled by a slow SOCKS consumer.
 func (s *Session) ProcessRx(f *frame.Frame) {
 	s.mu.Lock()
 	if s.rxClosed {
@@ -299,6 +310,9 @@ func (s *Session) ProcessRx(f *frame.Frame) {
 	select {
 	case s.rxInbox <- f:
 	case <-s.rxDone:
+	default:
+		// rxInbox full — kill the session rather than block the poll worker.
+		s.Stop()
 	}
 }
 
@@ -343,11 +357,20 @@ func (s *Session) deliverRx(f *frame.Frame) bool {
 	s.mu.Unlock()
 
 	for _, p := range toSend {
-		s.RxChan <- p
+		select {
+		case s.RxChan <- p:
+		case <-s.rxDone:
+			// Session was killed (e.g. rxInbox overflow). If a FIN was already
+			// decoded, close RxChan now; otherwise rxLoop's defer handles it.
+			if closeAfter {
+				close(s.RxChan)
+			}
+			return true
+		}
 	}
 	if closeAfter {
 		close(s.RxChan)
-		s.Stop() // unblocks any concurrent ProcessRx call waiting on rxInbox
+		s.Stop()
 	}
 	return closeAfter
 }
