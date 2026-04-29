@@ -27,3 +27,9 @@ deploy.sh
 # Misc
 *.token
 *.log
+
+# Bench artifacts (baselines/ are committed; results/ are per-run)
+/bench/bin/
+/bench/results/*.json
+/bench/.head_bin/
+/bench/.worktrees/

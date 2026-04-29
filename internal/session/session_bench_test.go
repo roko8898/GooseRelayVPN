@@ -37,6 +37,29 @@ func BenchmarkSessionEnqueueDrain_1MiB(b *testing.B) {
 	}
 }
 
+func BenchmarkSessionDrainTxLimited_VariedBudget(b *testing.B) {
+	chunk := bytes.Repeat([]byte("x"), 256*1024)
+	cases := []struct {
+		name      string
+		maxFrames int
+	}{
+		{"unlimited", 0},
+		{"frames_4", 4},
+		{"frames_16", 16},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				s := New(benchSID(4), "example.com:443", true)
+				s.OnTx = func() {}
+				s.EnqueueTx(chunk)
+				_ = s.DrainTxLimited(64*1024, tc.maxFrames)
+			}
+		})
+	}
+}
+
 func BenchmarkSessionProcessRx_Ordered(b *testing.B) {
 	payload := bytes.Repeat([]byte("x"), 32*1024)
 	b.ReportAllocs()

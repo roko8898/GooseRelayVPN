@@ -2,7 +2,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 GO ?= go
 
-.PHONY: all build client server test race vet tidy clean release-local
+.PHONY: all build client server test race vet tidy clean release-local bench bench-update
 
 all: build
 
@@ -28,6 +28,16 @@ tidy:
 
 clean:
 	rm -rf bin dist
+
+# Loopback E2E benchmark — see bench/README.md.
+# bench: diff HEAD against the latest committed baseline.
+# bench-update REF=vX.Y.Z: re-record baseline for the named ref.
+bench:
+	./bench/bench.sh
+
+bench-update:
+	@if [ -z "$(REF)" ]; then echo "usage: make bench-update REF=vX.Y.Z" >&2; exit 2; fi
+	./bench/bench.sh --update $(REF)
 
 # Local cross-compile dry run, mirroring the GitHub release matrix.
 release-local:

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -199,6 +200,36 @@ func TestDrainAll_RespectsBatchFrameCap(t *testing.T) {
 			t.Fatalf("expected busy cap %d frames, got %d", maxDrainFramesPerBatchBusy, len(frames))
 		}
 	})
+}
+
+// BenchmarkExitRouteIncoming_NSessions measures the cost of routing a data
+// frame to one of N already-open sessions on the server. This surfaces any
+// regression in lock contention or per-frame routing work as session fan-out
+// grows. Sessions are populated directly into s.sessions to avoid the openSession
+// dial path (covered separately by BenchmarkExitActiveSilent).
+func BenchmarkExitRouteIncoming_NSessions(b *testing.B) {
+	muteLogsForBench(b)
+	for _, n := range []int{1, 8, 64} {
+		b.Run("sessions_"+strconv.Itoa(n), func(b *testing.B) {
+			s := mustExitTimingServer(b)
+			ids := make([][frame.SessionIDLen]byte, n)
+			for i := range ids {
+				ids[i] = benchSessionID(i + 1)
+				sess := session.New(ids[i], "x:1", false)
+				s.sessions[ids[i]] = sess
+			}
+			payload := bytes.Repeat([]byte{'x'}, 1024)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				id := ids[i%n]
+				s.routeIncoming(&frame.Frame{
+					SessionID: id,
+					Seq:       uint64(i),
+					Payload:   payload,
+				})
+			}
+		})
+	}
 }
 
 func BenchmarkExitDialFailureBackoffComparison(b *testing.B) {

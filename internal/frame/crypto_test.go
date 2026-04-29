@@ -109,6 +109,37 @@ func TestDecodeBatch_EmptyBody(t *testing.T) {
 	}
 }
 
+func benchSealOpenBatch(b *testing.B, frames int, payloadSize int) {
+	c, err := NewCryptoFromHexKey(testKeyHex)
+	if err != nil {
+		b.Fatalf("crypto: %v", err)
+	}
+	in := make([]*Frame, frames)
+	pl := bytes.Repeat([]byte{'p'}, payloadSize)
+	for i := range in {
+		in[i] = &Frame{SessionID: sid(byte(i)), Seq: uint64(i), Payload: pl}
+	}
+	body, err := EncodeBatch(c, in)
+	if err != nil {
+		b.Fatalf("encode: %v", err)
+	}
+	b.SetBytes(int64(len(body)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		body, err := EncodeBatch(c, in)
+		if err != nil {
+			b.Fatalf("encode: %v", err)
+		}
+		if _, err := DecodeBatch(c, body); err != nil {
+			b.Fatalf("decode: %v", err)
+		}
+	}
+}
+
+func BenchmarkSealOpenBatch_8x4KiB(b *testing.B)  { benchSealOpenBatch(b, 8, 4*1024) }
+func BenchmarkSealOpenBatch_64x4KiB(b *testing.B) { benchSealOpenBatch(b, 64, 4*1024) }
+
 // Tampering any byte in the ciphertext must cause the entire batch to be
 // rejected — the batch is authenticated as a single unit.
 func TestDecodeBatch_TamperedBatchFails(t *testing.T) {

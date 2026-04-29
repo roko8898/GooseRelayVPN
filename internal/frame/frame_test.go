@@ -119,3 +119,48 @@ func TestUnmarshal_TargetTooLongRejectedAtMarshal(t *testing.T) {
 		t.Fatal("expected error on oversized target")
 	}
 }
+
+func benchMarshalBatch(b *testing.B, n int) []*Frame {
+	b.Helper()
+	pl := bytes.Repeat([]byte{'p'}, 4*1024)
+	out := make([]*Frame, n)
+	for i := range out {
+		out[i] = &Frame{SessionID: sid(byte(i)), Seq: uint64(i), Payload: pl}
+	}
+	return out
+}
+
+func BenchmarkEncodeBatch_64Frames(b *testing.B) {
+	c, err := NewCryptoFromHexKey(testKeyHex)
+	if err != nil {
+		b.Fatalf("crypto: %v", err)
+	}
+	in := benchMarshalBatch(b, 64)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := EncodeBatch(c, in); err != nil {
+			b.Fatalf("encode: %v", err)
+		}
+	}
+}
+
+func BenchmarkDecodeBatch_64Frames(b *testing.B) {
+	c, err := NewCryptoFromHexKey(testKeyHex)
+	if err != nil {
+		b.Fatalf("crypto: %v", err)
+	}
+	in := benchMarshalBatch(b, 64)
+	body, err := EncodeBatch(c, in)
+	if err != nil {
+		b.Fatalf("encode: %v", err)
+	}
+	b.SetBytes(int64(len(body)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := DecodeBatch(c, body); err != nil {
+			b.Fatalf("decode: %v", err)
+		}
+	}
+}
