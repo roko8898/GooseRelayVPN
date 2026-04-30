@@ -107,7 +107,7 @@ go build -o goose-server ./cmd/server
 این دستور را یک‌بار اجرا کنید:
 
 ```bash
-bash scripts/gen-key.sh
+openssl rand -hex 32
 ```
 
 رشته ۶۴ کاراکتری خروجی را کپی کنید. **همان مقدار** را هم در کانفیگ کلاینت و هم سرور می‌گذارید. محرمانه نگه دارید — هر کسی این کلید را داشته باشد می‌تواند از تونل شما استفاده کند.
@@ -406,7 +406,6 @@ GooseRelayVPN/
 ├── apps_script/
 │   └── Code.gs                     # ~30-line dumb forwarder
 ├── scripts/
-│   ├── gen-key.sh                  # openssl rand -hex 32
 │   └── goose-relay.service         # systemd unit template
 ├── client_config.example.json
 └── server_config.example.json
@@ -443,7 +442,7 @@ GooseRelayVPN/
 ## نکات امنیتی
 
 - **هرگز `client_config.json` یا `server_config.json` را با کسی به اشتراک نگذارید** — کلید AES داخل آن‌هاست و لو رفتن آن یعنی هر کسی می‌تواند از طریق VPS شما تونل بزند.
-- **برای هر deployment یک کلید تازه با `scripts/gen-key.sh` بسازید.** کلید را بین چند میزبان reuse نکنید.
+- **برای هر deployment یک کلید تازه با `openssl rand -hex 32` بسازید.** کلید را بین چند میزبان reuse نکنید.
 - **AES-GCM تنها احراز هویت است.** هیچ رمز عبور، rate-limiting یا حسابداری per-user وجود ندارد. کلید را مثل پسورد ادمین سرور نگه دارید.
 - **Apps Script هر `doPost` را در داشبورد گوگل لاگ می‌کند** (فقط تعداد و مدت — Apps Script هرگز متن خام را نمی‌بیند).
 - **`socks_host` کلاینت را روی `127.0.0.1` نگه دارید** مگر اینکه واقعاً قصد اشتراک LAN داشته باشید.

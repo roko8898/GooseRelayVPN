@@ -107,7 +107,7 @@ go build -o goose-server ./cmd/server
 Run this once:
 
 ```bash
-bash scripts/gen-key.sh
+openssl rand -hex 32
 ```
 
 Copy the 64-character string it prints. You'll use the **same value** in both the client and server configs. Keep it secret — anyone with this key can use your tunnel.
@@ -406,7 +406,6 @@ GooseRelayVPN/
 ├── apps_script/
 │   └── Code.gs                     # ~30-line dumb forwarder
 ├── scripts/
-│   ├── gen-key.sh                  # openssl rand -hex 32
 │   └── goose-relay.service         # systemd unit template
 ├── client_config.example.json
 └── server_config.example.json
@@ -443,7 +442,7 @@ GooseRelayVPN/
 ## Security Tips
 
 - **Never share `client_config.json` or `server_config.json`** — the AES key is in there and a leaked key means anyone can tunnel through your VPS.
-- **Generate a fresh key with `scripts/gen-key.sh`** for every deployment. Don't reuse keys across hosts.
+- **Generate a fresh key with `openssl rand -hex 32`** for every deployment. Don't reuse keys across hosts.
 - **AES-GCM is the only authentication.** There's no password, no rate-limiting, no per-user accounting. Treat the key like a server-admin password.
 - **Apps Script logs every `doPost` invocation** in Google's dashboard (count and duration only — Apps Script never sees plaintext).
 - **Keep `socks_host` on the client at `127.0.0.1`** unless you specifically want LAN sharing.
