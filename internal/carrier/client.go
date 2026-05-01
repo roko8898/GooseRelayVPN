@@ -118,8 +118,8 @@ func (w *waker) Broadcast() {
 type Client struct {
 	cfg         Config
 	aead        *frame.Crypto
-	httpClients []*http.Client  // one per SNI host; round-robined per request
-	nextHTTP    atomic.Uint64   // round-robin index into httpClients
+	httpClients []*http.Client // one per SNI host; round-robined per request
+	nextHTTP    atomic.Uint64  // round-robin index into httpClients
 	debugTiming bool
 	numWorkers  int // workersPerEndpoint × len(endpoints)
 
@@ -198,7 +198,7 @@ func New(cfg Config) (*Client, error) {
 	return &Client{
 		cfg:         cfg,
 		aead:        aead,
-		httpClients: NewFrontedClients(cfg.Fronting, pollTimeout),
+		httpClients: NewFrontedClients(cfg.Fronting, pollTimeout, endpoints[0].url),
 		debugTiming: cfg.DebugTiming,
 		numWorkers:  workersPerEndpoint * len(endpoints),
 		clientID:    clientID,

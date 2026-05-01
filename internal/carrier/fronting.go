@@ -7,10 +7,17 @@ package carrier
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 )
+
+const frontedProbeOKBody = "GooseRelay forwarder OK"
 
 // FrontingConfig describes how to reach script.google.com without revealing
 // the real Host to a passive on-path observer: dial GoogleIP, do a TLS
@@ -39,7 +46,7 @@ type FrontingConfig struct {
 // edge backend (e.g. www.google.com) is not valid for another (e.g.
 // mail.google.com) because they terminate at different fronts, so a
 // shared cache produces no resumes — only same-SNI reuse helps.
-func NewFrontedClients(cfg FrontingConfig, pollTimeout time.Duration) []*http.Client {
+func NewFrontedClients(cfg FrontingConfig, pollTimeout time.Duration, probeURL string) []*http.Client {
 	hosts := cfg.SNIHosts
 	if len(hosts) == 0 {
 		hosts = []string{"www.google.com"}
@@ -54,11 +61,216 @@ func NewFrontedClients(cfg FrontingConfig, pollTimeout time.Duration) []*http.Cl
 	for i, sni := range hosts {
 		clients[i] = newFrontedClient(cfg.GoogleIP, sni, pollTimeout, caches[sni])
 	}
+	hosts, clients = filterFrontedClientsByProbe(hosts, clients, probeURL)
 	// Best-effort: warm each SNI's TLS session in the background so the
 	// first real poll resumes (saves ~140 ms TLS handshake per cold conn).
 	// Zero Apps Script executions consumed; failures are silently ignored.
 	prewarmFrontedClients(cfg.GoogleIP, hosts, caches)
 	return clients
+}
+
+type frontedProbeResult struct {
+	index   int
+	host    string
+	client  *http.Client
+	samples []time.Duration
+	err     error
+}
+
+func (r frontedProbeResult) ok() bool {
+	return len(r.samples) > 0
+}
+
+func (r frontedProbeResult) latency() time.Duration {
+	if len(r.samples) == 0 {
+		return 0
+	}
+	sorted := append([]time.Duration(nil), r.samples...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	return sorted[len(sorted)/2]
+}
+
+// filterFrontedClientsByProbe probes each configured SNI once at startup and
+// removes only clearly bad candidates: hosts that never complete a response,
+// or successful hosts that are dramatic outliers while at least two faster
+// survivors remain. Round-robin still happens across the retained set.
+func filterFrontedClientsByProbe(hosts []string, clients []*http.Client, probeURL string) ([]string, []*http.Client) {
+	if len(hosts) <= 1 || probeURL == "" {
+		return hosts, clients
+	}
+
+	results := probeFrontedClients(hosts, clients, probeURL)
+	keep := selectFrontedClientIndexes(results)
+	if len(keep) == 0 {
+		return hosts, clients
+	}
+
+	keptHosts := make([]string, 0, len(keep))
+	keptClients := make([]*http.Client, 0, len(keep))
+	kept := make(map[int]struct{}, len(keep))
+	for _, idx := range keep {
+		kept[idx] = struct{}{}
+		keptHosts = append(keptHosts, hosts[idx])
+		keptClients = append(keptClients, clients[idx])
+	}
+
+	logFrontedProbeDecision(results, keep)
+	return keptHosts, keptClients
+}
+
+func probeFrontedClients(hosts []string, clients []*http.Client, probeURL string) []frontedProbeResult {
+	const (
+		probeSamples = 2
+		probeTimeout = 8 * time.Second
+	)
+	results := make([]frontedProbeResult, len(hosts))
+	resultCh := make(chan frontedProbeResult, len(hosts))
+	for i, host := range hosts {
+		client := clients[i]
+		go func(index int, sniHost string, httpClient *http.Client) {
+			res := frontedProbeResult{index: index, host: sniHost, client: httpClient}
+			for sample := 0; sample < probeSamples; sample++ {
+				ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+				if err != nil {
+					cancel()
+					res.err = err
+					break
+				}
+				start := time.Now()
+				resp, err := httpClient.Do(req)
+				if err != nil {
+					cancel()
+					res.err = err
+					continue
+				}
+				body, readErr := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if readErr != nil {
+					cancel()
+					res.err = readErr
+					continue
+				}
+				if err := validateFrontedProbeResponse(resp.StatusCode, body); err != nil {
+					cancel()
+					res.err = err
+					continue
+				}
+				res.samples = append(res.samples, time.Since(start))
+				cancel()
+			}
+			resultCh <- res
+		}(i, host, client)
+	}
+
+	for range hosts {
+		res := <-resultCh
+		results[res.index] = res
+	}
+	return results
+}
+
+func validateFrontedProbeResponse(statusCode int, body []byte) error {
+	if statusCode != http.StatusOK {
+		return fmt.Errorf("unexpected probe status %d", statusCode)
+	}
+	if strings.TrimSpace(string(body)) != frontedProbeOKBody {
+		return fmt.Errorf("unexpected probe body %q", strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func selectFrontedClientIndexes(results []frontedProbeResult) []int {
+	if len(results) <= 1 {
+		return allFrontedClientIndexes(len(results))
+	}
+
+	successes := make([]frontedProbeResult, 0, len(results))
+	for _, res := range results {
+		if res.ok() {
+			successes = append(successes, res)
+		}
+	}
+	if len(successes) == 0 {
+		return allFrontedClientIndexes(len(results))
+	}
+	if len(successes) == 1 {
+		return []int{successes[0].index}
+	}
+
+	latencies := make([]time.Duration, 0, len(successes))
+	for _, res := range successes {
+		latencies = append(latencies, res.latency())
+	}
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	median := latencies[len(latencies)/2]
+	if len(successes) <= 2 || median <= 0 {
+		return indexesForFrontedResults(successes)
+	}
+
+	threshold := 3 * median
+	kept := make([]int, 0, len(successes))
+	for _, res := range successes {
+		if res.latency() <= threshold {
+			kept = append(kept, res.index)
+		}
+	}
+	if len(kept) < 2 {
+		return indexesForFrontedResults(successes)
+	}
+	return kept
+}
+
+func indexesForFrontedResults(results []frontedProbeResult) []int {
+	indexes := make([]int, 0, len(results))
+	for _, res := range results {
+		indexes = append(indexes, res.index)
+	}
+	return indexes
+}
+
+func allFrontedClientIndexes(n int) []int {
+	indexes := make([]int, n)
+	for i := range indexes {
+		indexes[i] = i
+	}
+	return indexes
+}
+
+func logFrontedProbeDecision(results []frontedProbeResult, keep []int) {
+	kept := make(map[int]struct{}, len(keep))
+	for _, idx := range keep {
+		kept[idx] = struct{}{}
+	}
+	latencies := make([]time.Duration, 0, len(results))
+	for _, res := range results {
+		if res.ok() {
+			latencies = append(latencies, res.latency())
+		}
+	}
+	if len(latencies) > 0 {
+		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	}
+	median := time.Duration(0)
+	if len(latencies) > 0 {
+		median = latencies[len(latencies)/2]
+	}
+	for _, res := range results {
+		action := "drop"
+		if _, ok := kept[res.index]; ok {
+			action = "keep"
+		}
+		if res.ok() {
+			log.Printf("[fronting] startup probe %s sni=%s ttfb=%s samples=%d", action, res.host, res.latency().Round(time.Millisecond), len(res.samples))
+			continue
+		}
+		if res.err != nil {
+			log.Printf("[fronting] startup probe %s sni=%s err=%v", action, res.host, res.err)
+			continue
+		}
+		log.Printf("[fronting] startup probe %s sni=%s no-successful-samples", action, res.host)
+	}
+	log.Printf("[fronting] startup probe kept %d/%d sni hosts median_ttfb=%s", len(keep), len(results), median.Round(time.Millisecond))
 }
 
 // prewarmFrontedClients fires one TLS dial per SNI host in the background
