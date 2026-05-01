@@ -81,6 +81,18 @@ const (
 	busySessionThreshold       = 24
 	maxDrainFramesPerBatchBusy = 144
 
+	// maxResponseBytesPreEncode bounds the total payload bytes packed into one
+	// HTTP response, before AES-GCM seal and base64. Apps Script's UrlFetchApp
+	// caps responses at 50MB; the carrier client caps reads at 32MB. Without a
+	// byte-level budget, a busy-mode batch (144 × 256KB = 36MB raw → ~48MB
+	// base64) can exceed both ceilings — the client logs "relay response too
+	// large; dropping batch" and the entire batch is silently lost (issue #22),
+	// which manifests as stalled downloads. 22MB raw → ~30MB on the wire after
+	// base64 inflation and crypto/header overhead, comfortably under the 32MB
+	// client cap with margin to absorb a final overshooting frame from the
+	// last drained session.
+	maxResponseBytesPreEncode = 22 * 1024 * 1024
+
 	// dialFailureBackoff is how long we suppress repeated SYN dial attempts to a
 	// target after a structural network/DNS failure.
 	dialFailureBackoff = 2 * time.Second
@@ -292,19 +304,25 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 	// while empty polls keep long-poll behavior for push responsiveness.
 	deadline := time.Now().Add(s.drainWindow(rxFrames))
 	for {
-		txFrames, urgent := s.drainAll(clientID)
+		txFrames, urgent := s.drainAll(clientID, maxResponseBytesPreEncode)
 		if len(txFrames) > 0 {
+			// Track running payload bytes so the coalesce loop respects the
+			// same response-size budget across multiple drainAll calls.
+			var totalBytes int
+			for _, f := range txFrames {
+				totalBytes += len(f.Payload)
+			}
 			// Coalesce bursts into one response to reduce per-request overhead,
 			// but only when the batch is large enough to be bulk/video traffic.
 			// Small batches (≤ coalesceMinFrames) are interactive; adding a
 			// 25ms wait there compounds latency across every TLS round-trip.
 			// Urgent batches (RSTs, first downstream after SYN) skip coalesce
 			// unconditionally so connection setup is not delayed.
-			if !urgent && len(txFrames) > coalesceMinFrames {
+			if !urgent && len(txFrames) > coalesceMinFrames && totalBytes < maxResponseBytesPreEncode {
 				coalesceDeadline := time.Now().Add(s.coalesceDuration(len(txFrames)))
 			coalesceLoop:
 				for {
-					if time.Now().After(coalesceDeadline) {
+					if time.Now().After(coalesceDeadline) || totalBytes >= maxResponseBytesPreEncode {
 						break coalesceLoop
 					}
 					remainingCoalesce := time.Until(coalesceDeadline)
@@ -312,7 +330,10 @@ func (s *Server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 					case <-r.Context().Done():
 						return
 					case <-wakeCh:
-						more, _ := s.drainAll(clientID)
+						more, _ := s.drainAll(clientID, maxResponseBytesPreEncode-totalBytes)
+						for _, f := range more {
+							totalBytes += len(f.Payload)
+						}
 						txFrames = append(txFrames, more...)
 					case <-time.After(remainingCoalesce):
 						break coalesceLoop
@@ -559,7 +580,7 @@ func (s *Server) openSession(id [frame.SessionIDLen]byte, target string, owner [
 // isolated: without it, whichever client's HTTP request reaches drainAll
 // first would receive every other client's downstream frames and silently
 // drop them, breaking every TLS stream in flight.
-func (s *Server) drainAll(owner [frame.ClientIDLen]byte) ([]*frame.Frame, bool) {
+func (s *Server) drainAll(owner [frame.ClientIDLen]byte, byteBudget int) ([]*frame.Frame, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []*frame.Frame
@@ -574,8 +595,9 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte) ([]*frame.Frame, bool) 
 		batchCap = maxDrainFramesPerBatchBusy
 	}
 	remaining := batchCap
+	remainingBytes := byteBudget
 	for id := range s.txReady {
-		if remaining <= 0 {
+		if remaining <= 0 || remainingBytes <= 0 {
 			break
 		}
 		if s.sessionOwners[id] != owner {
@@ -604,6 +626,9 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte) ([]*frame.Frame, bool) 
 			// client→server frames would be force-closed by the idle GC after
 			// idleSessionTimeout even though it is actively delivering data.
 			s.lastActivity[id] = time.Now()
+			for _, f := range frames {
+				remainingBytes -= len(f.Payload)
+			}
 		}
 		out = append(out, frames...)
 		remaining -= len(frames)

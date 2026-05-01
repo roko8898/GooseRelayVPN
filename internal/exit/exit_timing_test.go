@@ -426,7 +426,7 @@ func TestDrainAll_RespectsBatchFrameCap(t *testing.T) {
 		for id := range s.sessions {
 			s.sessionOwners[id] = owner
 		}
-		frames, _ := s.drainAll(owner)
+		frames, _ := s.drainAll(owner, maxResponseBytesPreEncode)
 		expected := total
 		if expected > maxDrainFramesPerBatch {
 			expected = maxDrainFramesPerBatch
@@ -455,11 +455,73 @@ func TestDrainAll_RespectsBatchFrameCap(t *testing.T) {
 		for id := range s.sessions {
 			s.sessionOwners[id] = owner
 		}
-		frames, _ := s.drainAll(owner)
+		frames, _ := s.drainAll(owner, maxResponseBytesPreEncode)
 		if len(frames) != maxDrainFramesPerBatchBusy {
 			t.Fatalf("expected busy cap %d frames, got %d", maxDrainFramesPerBatchBusy, len(frames))
 		}
 	})
+}
+
+// TestDrainAll_RespectsByteBudget is the regression test for issue #22
+// (relay response too large; download-mode silent drops). Without a
+// byte-level budget, busy mode could pack 144 × 256KB = 36MB raw → ~48MB
+// base64, exceeding the carrier client's 32MB cap. The fix caps total
+// payload bytes per response at maxResponseBytesPreEncode.
+//
+// We populate enough sessions, each with a full max-payload buffer, that
+// the frame count cap (144) would naturally produce ~36MB. The byte
+// budget must hold the response under maxResponseBytesPreEncode + the
+// last drained session's per-session overshoot (worst case: one final
+// max-sized frame past the budget = ~256KB slack).
+func TestDrainAll_RespectsByteBudget(t *testing.T) {
+	s := mustExitTimingServer(t)
+	// Enough sessions to cross busySessionThreshold AND to provide more
+	// total bytes than the budget. Each session contributes one full
+	// MaxFramePayload-sized frame on drain.
+	totalSessions := busySessionThreshold + maxDrainFramesPerBatchBusy
+	chunk := bytes.Repeat([]byte("x"), MaxFramePayload)
+
+	var owner [frame.ClientIDLen]byte
+	owner[0] = 0x42
+	for i := 0; i < totalSessions; i++ {
+		id := benchSessionID(i + 9000)
+		sess := session.New(id, "x:1", false)
+		sess.EnqueueTx(chunk)
+		s.sessions[id] = sess
+		s.sessionOwners[id] = owner
+		s.txReady[id] = struct{}{}
+	}
+
+	frames, _ := s.drainAll(owner, maxResponseBytesPreEncode)
+	if len(frames) == 0 {
+		t.Fatal("drainAll returned no frames; test setup did not exercise the budget")
+	}
+
+	var totalBytes int
+	for _, f := range frames {
+		totalBytes += len(f.Payload)
+	}
+
+	// The loop checks the byte budget BEFORE adding each session's frames,
+	// so the worst-case overshoot is one session's perSessionCap of
+	// max-sized frames. Allow that slack; the goal is "stays under client
+	// cap (32MB)", not "exact match".
+	maxAllowed := maxResponseBytesPreEncode + maxDrainFramesPerSession*MaxFramePayload
+	if totalBytes > maxAllowed {
+		t.Fatalf("response bytes = %d, want ≤ %d (budget=%d, slack=%d)",
+			totalBytes, maxAllowed, maxResponseBytesPreEncode,
+			maxDrainFramesPerSession*MaxFramePayload)
+	}
+
+	// And under the carrier client's 32MB cap, with margin for base64 (1.33×)
+	// and crypto/header overhead. The whole point of #22 is that this
+	// invariant must hold.
+	const clientCap = 32 * 1024 * 1024
+	estimatedWireBytes := totalBytes * 4 / 3 // base64 inflation
+	if estimatedWireBytes > clientCap {
+		t.Fatalf("estimated wire response = %d bytes, exceeds carrier client cap %d",
+			estimatedWireBytes, clientCap)
+	}
 }
 
 // BenchmarkExitRouteIncoming_NSessions measures the cost of routing a data
