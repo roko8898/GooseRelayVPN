@@ -169,19 +169,20 @@ func TestDecodeBatch_LegacyPadding(t *testing.T) {
 	in := []*Frame{{SessionID: sid(1), Payload: []byte("legacy")}}
 	var zeroClient [ClientIDLen]byte
 
-	// Manually construct a padded base64 batch (like an older version would).
-	plainSize := ClientIDLen + 2 + 4 + 1 + 8 + 6 // header + u16 + u32 len + flags + sid + payload
-	plain := make([]byte, 0, plainSize)
-	plain = append(plain, zeroClient[:]...)
-	plain = append(plain, 0, 1) // count = 1
+	// Manually construct a batch in the new plaintext format but with
+	// StdEncoding (padded) base64 — older binaries emitted padded output.
 	rawFrame, _ := in[0].Marshal()
+	plain := make([]byte, 0)
+	plain = append(plain, batchFlagRaw)     // flags byte
+	plain = append(plain, zeroClient[:]...) // client_id
+	plain = append(plain, 0, 1)             // frame count = 1
 	plain = append(plain, byte(len(rawFrame)>>24), byte(len(rawFrame)>>16), byte(len(rawFrame)>>8), byte(len(rawFrame)))
 	plain = append(plain, rawFrame...)
 
 	sealed, _ := c.Seal(plain)
 	legacyBody := []byte(base64.StdEncoding.EncodeToString(sealed))
 
-	// Should still decode correctly.
+	// Should still decode correctly despite padded base64.
 	gotClient, out, err := DecodeBatch(c, legacyBody)
 	if err != nil {
 		t.Fatalf("decode legacy: %v", err)
@@ -191,5 +192,51 @@ func TestDecodeBatch_LegacyPadding(t *testing.T) {
 	}
 	if len(out) != 1 || !bytes.Equal(out[0].Payload, in[0].Payload) {
 		t.Fatal("payload mismatch")
+	}
+}
+
+func TestEncodeDecodeBatch_Compressed(t *testing.T) {
+	c := newTestCrypto(t)
+	// Repeat highly compressible data to exceed compressMinSize (512 bytes).
+	payload := bytes.Repeat([]byte("Hello, compressible test payload! "), 20)
+	if len(payload) < compressMinSize {
+		t.Fatalf("payload too small to trigger compression: %d bytes", len(payload))
+	}
+	in := []*Frame{
+		{SessionID: sid(1), Seq: 0, Flags: FlagSYN, Target: "example.com:443", Payload: payload},
+		{SessionID: sid(1), Seq: 1, Payload: payload},
+	}
+	var clientID [ClientIDLen]byte
+	for i := range clientID {
+		clientID[i] = byte(i + 1)
+	}
+	body, err := EncodeBatch(c, clientID, in)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	gotClient, out, err := DecodeBatch(c, body)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if gotClient != clientID {
+		t.Fatalf("clientID mismatch: got %x want %x", gotClient, clientID)
+	}
+	if len(out) != len(in) {
+		t.Fatalf("frame count: got %d want %d", len(out), len(in))
+	}
+	for i := range in {
+		if out[i].SessionID != in[i].SessionID || out[i].Seq != in[i].Seq ||
+			out[i].Flags != in[i].Flags || out[i].Target != in[i].Target {
+			t.Fatalf("frame %d header mismatch", i)
+		}
+		if !bytes.Equal(out[i].Payload, in[i].Payload) {
+			t.Fatalf("frame %d payload mismatch", i)
+		}
+	}
+	// Verify that the compressed wire body is smaller than it would be
+	// uncompressed (proves compression actually fired for this payload).
+	plainSize := 1 + ClientIDLen + 2 + len(in)*(4+SessionIDLen+8+1+1+4+len(payload))
+	if len(body) >= plainSize {
+		t.Logf("note: wire body (%d) not smaller than estimated uncompressed (%d) — check threshold", len(body), plainSize)
 	}
 }

@@ -2,6 +2,7 @@ package frame
 
 import (
 	"bytes"
+	"compress/flate"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 )
 
@@ -95,6 +97,26 @@ var (
 		buf := make([][]byte, 0, 32)
 		return &buf
 	}}
+	// flateBufPool and flateWriterPool are used by EncodeBatch when batch
+	// compression is attempted. Re-using a flate.Writer avoids rebuilding
+	// its internal Huffman tables on every call (~4 KB of setup cost).
+	flateBufPool    = sync.Pool{New: func() interface{} { return &bytes.Buffer{} }}
+	flateWriterPool = sync.Pool{New: func() interface{} {
+		w, _ := flate.NewWriter(nil, flate.BestSpeed)
+		return w
+	}}
+)
+
+const (
+	// batchFlagRaw marks an uncompressed plaintext payload.
+	batchFlagRaw = byte(0x00)
+	// batchFlagFlate marks a DEFLATE-compressed plaintext payload.
+	batchFlagFlate = byte(0x01)
+
+	// compressMinSize is the minimum payload size (excluding the flags byte)
+	// before compression is attempted. Tiny batches (SYN/FIN/keepalive) are
+	// unlikely to benefit and the flate setup cost would dominate.
+	compressMinSize = 512
 )
 
 // EncodeBatch packs zero or more frames into a base64-encoded HTTP body.
@@ -102,9 +124,11 @@ var (
 // Wire format (before base64):
 //
 //	nonce (12 bytes) || AES-GCM ciphertext+tag over:
+//	    flags (1 byte)  — 0x00 raw | 0x01 DEFLATE-compressed body
 //	    client_id (16 bytes)
 //	    u16 frame_count
 //	    for each frame: u32 marshaled_len || marshaled_frame_bytes
+//	    (above three fields are DEFLATE-compressed when flags == 0x01)
 //
 // The entire batch is sealed once, replacing the old per-frame envelope scheme.
 // This reduces crypto overhead from O(N) nonces+tags to one, cutting both CPU
@@ -132,7 +156,7 @@ func EncodeBatch(c *Crypto, clientID [ClientIDLen]byte, frames []*Frame) ([]byte
 		encMarshaledPool.Put(marshaledP)
 	}()
 
-	plainSize := ClientIDLen + 2 // client_id + u16 frame count
+	plainSize := 1 + ClientIDLen + 2 // flags byte + client_id + u16 frame count
 	for _, f := range frames {
 		raw, err := f.Marshal()
 		if err != nil {
@@ -156,6 +180,7 @@ func EncodeBatch(c *Crypto, clientID [ClientIDLen]byte, frames []*Frame) ([]byte
 		encPlainPool.Put(plainP)
 	}()
 
+	plain = append(plain, 0x00) // flags placeholder at index 0
 	plain = append(plain, clientID[:]...)
 	plain = append(plain, byte(len(frames)>>8), byte(len(frames)))
 	for _, raw := range marshaled {
@@ -164,7 +189,36 @@ func EncodeBatch(c *Crypto, clientID [ClientIDLen]byte, frames []*Frame) ([]byte
 		plain = append(plain, raw...)
 	}
 
-	sealed, err := c.Seal(plain)
+	// Attempt DEFLATE compression on the payload section (everything after the
+	// flags byte at index 0). Only worthwhile for batches large enough that the
+	// flate setup cost is amortised; small control batches (SYN/FIN/keepalive)
+	// are sent raw. If compression does not shrink the data (e.g. already-
+	// encrypted or binary payloads) we fall back to raw transparently.
+	sealInput := plain // default: raw, flags byte already 0x00
+	if len(plain)-1 >= compressMinSize {
+		cbuf := flateBufPool.Get().(*bytes.Buffer)
+		cbuf.Reset()
+		fw := flateWriterPool.Get().(*flate.Writer)
+		fw.Reset(cbuf)
+		_, _ = fw.Write(plain[1:])
+		_ = fw.Close()
+		if cbuf.Len() < len(plain)-1 {
+			// Compression helped: build a fresh slice [batchFlagFlate | compressed].
+			// The [:1:1] cap trick ensures append allocates a new backing array
+			// so the pool-owned plain buffer is never modified.
+			compressed := append(plain[:1:1], cbuf.Bytes()...)
+			compressed[0] = batchFlagFlate
+			sealInput = compressed
+		} else {
+			plain[0] = batchFlagRaw
+		}
+		flateWriterPool.Put(fw)
+		flateBufPool.Put(cbuf)
+	} else {
+		plain[0] = batchFlagRaw
+	}
+
+	sealed, err := c.Seal(sealInput)
 	if err != nil {
 		return nil, fmt.Errorf("batch: seal: %w", err)
 	}
@@ -178,11 +232,11 @@ func EncodeBatch(c *Crypto, clientID [ClientIDLen]byte, frames []*Frame) ([]byte
 // DecodeBatch is the inverse of EncodeBatch. The entire batch is authenticated
 // as a single unit; any corruption causes the whole batch to be rejected.
 //
-// Zero-copy contract: Frame.Payload slices returned here point directly into
-// the plaintext buffer allocated by c.Open. Callers must not modify that buffer.
-// Since c.Open always allocates a fresh slice, this is safe as long as callers
-// treat Frame.Payload as read-only — which session.ProcessRx and upstream.Write
-// both do.
+// Zero-copy contract: when the batch is uncompressed (batchFlagRaw), Frame.Payload
+// slices point directly into the plaintext buffer allocated by c.Open — callers
+// must treat them as read-only. For compressed batches (batchFlagFlate) the
+// payloads point into the decompressed buffer, which is also heap-allocated and
+// must not be modified by callers.
 func DecodeBatch(c *Crypto, body []byte) ([ClientIDLen]byte, []*Frame, error) {
 	var zeroID [ClientIDLen]byte
 	if len(body) == 0 {
@@ -202,9 +256,31 @@ func DecodeBatch(c *Crypto, body []byte) ([ClientIDLen]byte, []*Frame, error) {
 	}
 	sealed = sealed[:n]
 
-	plain, err := c.Open(sealed)
+	rawPlain, err := c.Open(sealed)
 	if err != nil {
 		return zeroID, nil, fmt.Errorf("batch: open: %w", err)
+	}
+
+	// Decode the leading flags byte. Both peers must run the same version;
+	// an unrecognised flag byte is rejected so a protocol mismatch surfaces
+	// immediately rather than producing silent corruption.
+	if len(rawPlain) == 0 {
+		return zeroID, nil, errors.New("batch: empty plaintext")
+	}
+	var plain []byte
+	switch rawPlain[0] {
+	case batchFlagRaw:
+		plain = rawPlain[1:]
+	case batchFlagFlate:
+		r := flate.NewReader(bytes.NewReader(rawPlain[1:]))
+		var buf bytes.Buffer
+		if _, err := io.Copy(&buf, r); err != nil {
+			return zeroID, nil, fmt.Errorf("batch: flate decompress: %w", err)
+		}
+		r.Close()
+		plain = buf.Bytes()
+	default:
+		return zeroID, nil, fmt.Errorf("batch: unknown flags byte 0x%02x", rawPlain[0])
 	}
 
 	if len(plain) < ClientIDLen+2 {
