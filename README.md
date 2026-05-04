@@ -351,14 +351,14 @@ By default the client listens on `127.0.0.1:1080` so only your computer can use 
 
 ## Increase capacity with multiple deployments (recommended)
 
-The **~20,000 calls/day quota applies per Google account**, not per deployment or project — all deployments under the same account share one quota pool. The client polls about once per second when idle, so a single deployment can sustain steady use, but heavy days hit the cap. Real-time apps like **Telegram or X can drain the quota within a few hours** due to constant polling. To go beyond that, deploy `Code.gs` across **different Google accounts** and put all the Deployment IDs into `script_keys`:
+The **~20,000 calls/day quota applies per Google account**, not per deployment or project — all deployments under the same account share one quota pool. The client polls about once per second when idle, so a single deployment can sustain steady use, but heavy days hit the cap. Real-time apps like **Telegram or X can drain the quota within a few hours** due to constant polling. To go beyond that, deploy `Code.gs` across **different Google accounts** and put all the Deployment IDs into `script_keys`. You can optionally label each ID with an `account` so the client aggregates per-account totals in the `[stats]` line:
 
 ```json
 {
   "script_keys": [
-    "FIRST_DEPLOYMENT_ID",
-    "SECOND_DEPLOYMENT_ID",
-    "THIRD_DEPLOYMENT_ID"
+    {"id": "FIRST_DEPLOYMENT_ID", "account": "acct-a"},
+    {"id": "SECOND_DEPLOYMENT_ID", "account": "acct-a"},
+    {"id": "THIRD_DEPLOYMENT_ID", "account": "acct-b"}
   ]
 }
 ```
@@ -387,7 +387,7 @@ What the client does for you automatically:
 | `socks_port` | `1080` | Port for the local SOCKS5 listener. |
 | `google_host` | `216.239.38.120` | Google edge IP/host to dial (port is fixed to `443`). |
 | `sni` | `www.google.com` | SNI presented during the TLS handshake. Accepts a single string or an array — `["www.google.com", "mail.google.com", "accounts.google.com"]` — where each SNI host gets its own connection and throttle bucket, which can multiply available bandwidth in regions that rate-limit per domain name. |
-| `script_keys` | — | Array of Apps Script Deployment IDs (no full URL needed). One ID is required; add more to increase throughput and quota — each ID spawns 3 concurrent poll workers and adds ~20,000 req/day quota. **Recommended: 3–4 IDs.** Going higher adds load without meaningful gains. |
+| `script_keys` | — | Array of Apps Script Deployment IDs (no full URL needed). Each entry may also be an object `{ "id": "...", "account": "..." }` to label deployments that belong to the same Google account, enabling per-account aggregation in the periodic `[stats]` line. One ID is required; add more to increase throughput and quota — each ID spawns 3 concurrent poll workers and adds ~20,000 req/day quota. **Recommended: 3–4 IDs.** Going higher adds load without meaningful gains. |
 | `tunnel_key` | — | 64-char hex AES-256 key. Must match the server byte-for-byte. |
 | `socks_user` | *(optional)* | SOCKS5 username (RFC 1929). When set, clients must authenticate or the connection is rejected. Must be paired with `socks_pass` — set both or neither. |
 | `socks_pass` | *(optional)* | SOCKS5 password paired with `socks_user`. |
@@ -408,6 +408,8 @@ What the client does for you automatically:
 ## Updating the Apps Script forwarder
 
 If you change `Code.gs` — for example to point at a new VPS IP — you must create a **new deployment** in the Apps Script editor (Deploy → **New deployment**, not just "Manage deployments"). Saving alone does nothing; the live `/exec` URL serves the published version. After redeploying, update `script_keys` in `client_config.json`.
+
+The current `Code.gs` also tracks per-deployment invocation counts and exposes them via `doGet`. If you have an older deployment, redeploying once enables the `script=N` field in the client's periodic `[stats]` line (the rest of the tunnel keeps working either way; you just won't see the script-side number until you redeploy).
 
 ---
 

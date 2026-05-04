@@ -351,14 +351,14 @@ nano client_config.json
 
 ## افزایش ظرفیت با چند deployment (پیشنهاد می‌شود)
 
-سهمیه **~۲۰٬۰۰۰ فراخوانی در روز به ازای هر اکانت گوگل** اعمال می‌شود، نه به ازای هر deployment یا پروژه — همه deploymentهای یک اکانت از یک quota مشترک استفاده می‌کنند. کلاینت در حالت بی‌کار حدود یک بار در ثانیه poll می‌کند، اما اپ‌های real-time مثل **تلگرام یا X می‌توانند quota را ظرف چند ساعت تمام کنند**. برای عبور از این محدودیت، `Code.gs` را روی **اکانت‌های مختلف گوگل** deploy کنید و همه Deployment IDها را در `script_keys` بگذارید:
+سهمیه **~۲۰٬۰۰۰ فراخوانی در روز به ازای هر اکانت گوگل** اعمال می‌شود، نه به ازای هر deployment یا پروژه — همه deploymentهای یک اکانت از یک quota مشترک استفاده می‌کنند. کلاینت در حالت بی‌کار حدود یک بار در ثانیه poll می‌کند، اما اپ‌های real-time مثل **تلگرام یا X می‌توانند quota را ظرف چند ساعت تمام کنند**. برای عبور از این محدودیت، `Code.gs` را روی **اکانت‌های مختلف گوگل** deploy کنید و همه Deployment IDها را در `script_keys` بگذارید. می‌توانید هر ID را با فیلد `account` برچسب بزنید تا جمعِ per-account در خط `[stats]` نمایش داده شود:
 
 ```json
 {
   "script_keys": [
-    "FIRST_DEPLOYMENT_ID",
-    "SECOND_DEPLOYMENT_ID",
-    "THIRD_DEPLOYMENT_ID"
+    {"id": "FIRST_DEPLOYMENT_ID", "account": "acct-a"},
+    {"id": "SECOND_DEPLOYMENT_ID", "account": "acct-a"},
+    {"id": "THIRD_DEPLOYMENT_ID", "account": "acct-b"}
   ]
 }
 ```
@@ -387,7 +387,7 @@ nano client_config.json
 | `socks_port` | `1080` | پورت SOCKS5 محلی. |
 | `google_host` | `216.239.38.120` | میزبان/IP لبه گوگل برای اتصال (پورت همیشه `443` است). |
 | `sni` | `www.google.com` | مقدار SNI در TLS. یک رشته یا آرایه می‌پذیرد — `["www.google.com", "mail.google.com", "accounts.google.com"]` — هر SNI اتصال و bucket جداگانه دارد که می‌تواند پهنای باند را در مناطقی که per-domain throttle دارند چند برابر کند. |
-| `script_keys` | — | آرایه Deployment IDهای Apps Script (بدون URL کامل). حداقل یک ID لازم است؛ هر ID اضافه ۳ worker موازی و ~۲۰٬۰۰۰ درخواست روزانه quota اضافه می‌کند. **پیشنهاد: ۳ تا ۴ ID.** تعداد بیشتر بار اضافی ایجاد می‌کند بدون بهبود محسوس. |
+| `script_keys` | — | آرایه Deployment IDهای Apps Script (بدون URL کامل). هر entry می‌تواند یک آبجکت `{ "id": "...", "account": "..." }` هم باشد تا deploymentهایی که زیر یک اکانت هستند برچسب بخورند و جمعِ per-account در خط دوره‌ای `[stats]` نشان داده شود. حداقل یک ID لازم است؛ هر ID اضافه ۳ worker موازی و ~۲۰٬۰۰۰ درخواست روزانه quota اضافه می‌کند. **پیشنهاد: ۳ تا ۴ ID.** تعداد بیشتر بار اضافی ایجاد می‌کند بدون بهبود محسوس. |
 | `tunnel_key` | — | کلید AES-256 به‌صورت hex (۶۴ کاراکتر). باید با سرور یکسان باشد. |
 | `socks_user` | *(اختیاری)* | نام کاربری SOCKS5 (RFC 1929). وقتی تنظیم شود، کلاینت‌ها باید احراز هویت کنند وگرنه اتصال رد می‌شود. باید همراه با `socks_pass` تنظیم شود — هر دو با هم یا هیچ‌کدام. |
 | `socks_pass` | *(اختیاری)* | رمز SOCKS5 متناظر با `socks_user`. |
@@ -408,6 +408,8 @@ nano client_config.json
 ## به‌روزرسانی forwarder در Apps Script
 
 اگر `Code.gs` را تغییر دادید — مثلاً برای تغییر IP VPS — باید در ویرایشگر Apps Script یک **deployment جدید** بسازید (Deploy → **New deployment**، نه فقط "Manage deployments"). صرفاً ذخیره کردن کد چیزی را عوض نمی‌کند؛ URL زنده `/exec` نسخه منتشرشده قبلی را سرو می‌کند. بعد از deploy جدید، `script_keys` را در `client_config.json` به‌روزرسانی کنید.
+
+نسخهٔ فعلی `Code.gs` تعداد فراخوانی هر deployment را هم می‌شمارد و از طریق `doGet` در دسترس می‌گذارد. اگر deployment قدیمی دارید، یک بار deploy مجدد باعث می‌شود فیلد `script=N` در خط دوره‌ای `[stats]` کلاینت ظاهر شود (در غیر این صورت تونل بدون مشکل کار می‌کند، فقط عدد سمت اسکریپت را نمی‌بینید).
 
 ---
 

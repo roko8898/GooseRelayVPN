@@ -69,7 +69,15 @@ const (
 
 // Config bundles everything the carrier needs to talk to the relay.
 type Config struct {
-	ScriptURLs  []string // one or more full https://script.google.com/macros/s/.../exec URLs
+	ScriptURLs []string // one or more full https://script.google.com/macros/s/.../exec URLs
+
+	// ScriptAccounts is an optional parallel slice to ScriptURLs labeling each
+	// deployment with the Google account it lives under. When set, the periodic
+	// stats line aggregates today/script counts by account so the operator can
+	// see how much of each account's ~20k/day quota has been spent. nil or
+	// shorter slices are tolerated; missing entries are treated as unlabeled.
+	ScriptAccounts []string
+
 	Fronting    FrontingConfig
 	AESKeyHex   string // 64-char hex, must match server
 	DebugTiming bool   // when true, log per-session TTFB and per-poll Apps Script RTT
@@ -80,14 +88,31 @@ type Config struct {
 	// the first kick. Bursts collapse into a single wake. Both 0 = disabled.
 	CoalesceStep time.Duration
 	CoalesceMax  time.Duration
+
 }
 
 type relayEndpoint struct {
 	url             string
+	account         string // optional human-readable Google account label, "" = unlabeled
 	blacklistedTill time.Time
 	failCount       int
 	statsOK         uint64
 	statsFail       uint64
+
+	// Per-quota-window counters. dailyCount is the number of HTTP responses
+	// received from Apps Script in the current window; dailyResetAt is the
+	// next midnight Pacific (the boundary at which Apps Script resets the
+	// per-account UrlFetch quota). Both are managed via touchDailyWindow.
+	dailyCount   uint64
+	dailyResetAt time.Time
+
+	// Script-reported per-day invocation count, fetched hourly via doGet on
+	// the same /exec URL. scriptCountAt is zero until the first successful
+	// fetch; scriptStatsErrLogged suppresses repeat "needs redeploy" warnings
+	// when the deployed Code.gs is the legacy version that doesn't return JSON.
+	scriptCount          uint64
+	scriptCountAt        time.Time
+	scriptStatsErrLogged bool
 }
 
 // workersPerEndpoint is the number of concurrent poll goroutines spawned for
@@ -157,9 +182,9 @@ type Client struct {
 
 	// Adaptive kick coalescing (see Config.CoalesceStep/Max). When step <= 0
 	// these fields are unused and kick() broadcasts immediately.
-	coalesceStep time.Duration
-	coalesceMax  time.Duration
-	coalesceMu   sync.Mutex
+	coalesceStep     time.Duration
+	coalesceMax      time.Duration
+	coalesceMu       sync.Mutex
 	coalesceTimer    *time.Timer // armed during a coalesce window; nil otherwise
 	coalesceDeadline time.Time   // hard cap for the in-flight window
 }
@@ -188,7 +213,7 @@ func New(cfg Config) (*Client, error) {
 
 	endpoints := make([]relayEndpoint, 0, len(cfg.ScriptURLs))
 	seen := make(map[string]struct{}, len(cfg.ScriptURLs))
-	for _, raw := range cfg.ScriptURLs {
+	for i, raw := range cfg.ScriptURLs {
 		url := strings.TrimSpace(raw)
 		if url == "" {
 			continue
@@ -197,7 +222,11 @@ func New(cfg Config) (*Client, error) {
 			continue
 		}
 		seen[url] = struct{}{}
-		endpoints = append(endpoints, relayEndpoint{url: url})
+		account := ""
+		if i < len(cfg.ScriptAccounts) {
+			account = strings.TrimSpace(cfg.ScriptAccounts[i])
+		}
+		endpoints = append(endpoints, relayEndpoint{url: url, account: account})
 	}
 	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("at least one script URL is required")
@@ -211,19 +240,19 @@ func New(cfg Config) (*Client, error) {
 	}
 
 	return &Client{
-		cfg:          cfg,
-		aead:         aead,
-		httpClients:  NewFrontedClients(cfg.Fronting, pollTimeout, endpoints[0].url),
-		debugTiming:  cfg.DebugTiming,
-		numWorkers:   workersPerEndpoint * len(endpoints),
-		clientID:     clientID,
-		sessions:     make(map[[frame.SessionIDLen]byte]*session.Session),
-		inFlight:     make(map[[frame.SessionIDLen]byte]bool),
-		txReady:      make(map[[frame.SessionIDLen]byte]struct{}),
-		endpoints:    endpoints,
-		wake:         newWaker(),
-		coalesceStep: cfg.CoalesceStep,
-		coalesceMax:  cfg.CoalesceMax,
+		cfg:              cfg,
+		aead:             aead,
+		httpClients:      NewFrontedClients(cfg.Fronting, pollTimeout, endpoints[0].url),
+		debugTiming:      cfg.DebugTiming,
+		numWorkers:       workersPerEndpoint * len(endpoints),
+		clientID:         clientID,
+		sessions:         make(map[[frame.SessionIDLen]byte]*session.Session),
+		inFlight:         make(map[[frame.SessionIDLen]byte]bool),
+		txReady:          make(map[[frame.SessionIDLen]byte]struct{}),
+		endpoints:        endpoints,
+		wake:             newWaker(),
+		coalesceStep:     cfg.CoalesceStep,
+		coalesceMax:      cfg.CoalesceMax,
 	}, nil
 }
 
@@ -322,6 +351,14 @@ func (c *Client) Run(ctx context.Context) error {
 	go func() {
 		defer wg.Done()
 		c.runStatsLoop(ctx)
+	}()
+	// Hourly fetch of each deployment's self-reported invocation count.
+	// Logged in the next [stats] line as `script=N` next to the existing
+	// client-side `today=N` so the user sees both perspectives.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		c.runScriptStatsLoop(ctx)
 	}()
 	wg.Wait()
 	return ctx.Err()
@@ -458,6 +495,11 @@ func (c *Client) pollOnce(ctx context.Context) bool {
 			pollStart = time.Now()
 		}
 		resp, err := c.pickHTTPClient().Do(req)
+		if err == nil {
+			// Apps Script counts every doPost invocation, regardless of status,
+			// so bump the daily counter once we know the request reached it.
+			c.bumpDailyCount(endpointIdx)
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return false
@@ -609,13 +651,15 @@ func (c *Client) pickRelayEndpoint() (int, string) {
 	start := c.nextEndpoint % n
 	for i := 0; i < n; i++ {
 		idx := (start + i) % n
-		ep := c.endpoints[idx]
-		if !ep.blacklistedTill.After(now) {
-			c.nextEndpoint = (idx + 1) % n
-			return idx, ep.url
+		ep := &c.endpoints[idx]
+		if ep.blacklistedTill.After(now) {
+			continue
 		}
+		c.nextEndpoint = (idx + 1) % n
+		return idx, ep.url
 	}
 
+	// All endpoints are unavailable. Pick the one that frees up soonest.
 	chosen := 0
 	soonest := c.endpoints[0].blacklistedTill
 	for i := 1; i < n; i++ {

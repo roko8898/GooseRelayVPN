@@ -159,13 +159,13 @@ func main() {
 	if cfg.CoalesceStepMs > 0 {
 		log.Printf("[client] uplink coalescing: step=%dms (internal safety cap %dms; bursts of TX collapse into a single poll)", cfg.CoalesceStepMs, cfg.CoalesceMaxMs)
 	}
-
 	carr, err := carrier.New(carrier.Config{
-		ScriptURLs:   cfg.ScriptURLs,
-		AESKeyHex:    cfg.AESKeyHex,
-		DebugTiming:  cfg.DebugTiming,
-		CoalesceStep: time.Duration(cfg.CoalesceStepMs) * time.Millisecond,
-		CoalesceMax:  time.Duration(cfg.CoalesceMaxMs) * time.Millisecond,
+		ScriptURLs:                  cfg.ScriptURLs,
+		ScriptAccounts:              cfg.ScriptAccounts,
+		AESKeyHex:                   cfg.AESKeyHex,
+		DebugTiming:                 cfg.DebugTiming,
+		CoalesceStep:                time.Duration(cfg.CoalesceStepMs) * time.Millisecond,
+		CoalesceMax:                 time.Duration(cfg.CoalesceMaxMs) * time.Millisecond,
 		Fronting: carrier.FrontingConfig{
 			GoogleIP: cfg.GoogleIP,
 			SNIHosts: cfg.SNIHosts,
