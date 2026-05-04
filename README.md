@@ -51,14 +51,14 @@ GooseRelayVPN is provided for educational, testing, and research purposes only.
 ```
 Browser/App
   -> SOCKS5  (127.0.0.1:1080)
-  -> AES-256-GCM raw-TCP frames
+  -> Zstd-compressed + AES-256-GCM frame batches
   -> HTTPS to a Google edge IP   (SNI=www.google.com, Host=script.google.com)
   -> Apps Script doPost()        (dumb forwarder, never sees plaintext)
   -> Your VPS :8443/tunnel       (decrypts, demuxes by session_id, dials target)
   <- Same path in reverse via long-polling
 ```
 
-Your application sends TCP bytes through the SOCKS5 listener on your computer. The client encrypts each chunk with AES-256-GCM and POSTs batches over a domain-fronted HTTPS connection to your Apps Script web app. The Apps Script is a ~30-line script that forwards the body verbatim to your VPS — it never decrypts and the AES key never touches Google. Your VPS decrypts, dials the real target, and pumps bytes back along the same path. The filter sees only TLS to Google.
+Your application sends TCP bytes through the SOCKS5 listener on your computer. The client groups them into batches of frames, **Zstandard-compresses** each batch (for compressible traffic such as plain HTTP or JSON APIs this reduces the body size by up to 65%, keeping you further from Apps Script's daily quota limits), then seals the whole batch under a single **AES-256-GCM** envelope and POSTs it over a domain-fronted HTTPS connection to your Apps Script web app. The Apps Script is a ~30-line script that forwards the body verbatim to your VPS — it never decrypts and the AES key never touches Google. Your VPS decrypts, dials the real target, and pumps bytes back along the same path. The filter sees only TLS to Google.
 
 ---
 

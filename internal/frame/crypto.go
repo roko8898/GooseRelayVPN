@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"sync"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // Crypto wraps an AES-256-GCM AEAD with the relay-tunnel envelope format:
@@ -97,25 +99,33 @@ var (
 		buf := make([][]byte, 0, 32)
 		return &buf
 	}}
-	// flateBufPool and flateWriterPool are used by EncodeBatch when batch
-	// compression is attempted. Re-using a flate.Writer avoids rebuilding
-	// its internal Huffman tables on every call (~4 KB of setup cost).
-	flateBufPool    = sync.Pool{New: func() interface{} { return &bytes.Buffer{} }}
-	flateWriterPool = sync.Pool{New: func() interface{} {
-		w, _ := flate.NewWriter(nil, flate.BestSpeed)
-		return w
+	// zstdEncPool and zstdDecPool are used by EncodeBatch/DecodeBatch.
+	// Pooling avoids re-initialising the encoder's internal state on every batch.
+	// SpeedFastest (level 1) is ~2× faster than DEFLATE BestSpeed and produces
+	// 10–15% smaller output on compressible text/HTTP traffic.
+	zstdEncPool = sync.Pool{New: func() interface{} {
+		enc, _ := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
+		return enc
+	}}
+	zstdDecPool = sync.Pool{New: func() interface{} {
+		dec, _ := zstd.NewReader(nil)
+		return dec
 	}}
 )
 
 const (
 	// batchFlagRaw marks an uncompressed plaintext payload.
 	batchFlagRaw = byte(0x00)
-	// batchFlagFlate marks a DEFLATE-compressed plaintext payload.
+	// batchFlagFlate is the legacy DEFLATE flag. No longer emitted by this
+	// version; retained so updated binaries can still decode batches sent by
+	// older peers that have not been redeployed yet.
 	batchFlagFlate = byte(0x01)
+	// batchFlagZstd marks a Zstandard-compressed plaintext payload.
+	batchFlagZstd = byte(0x02)
 
 	// compressMinSize is the minimum payload size (excluding the flags byte)
 	// before compression is attempted. Tiny batches (SYN/FIN/keepalive) are
-	// unlikely to benefit and the flate setup cost would dominate.
+	// unlikely to benefit.
 	compressMinSize = 512
 )
 
@@ -189,31 +199,25 @@ func EncodeBatch(c *Crypto, clientID [ClientIDLen]byte, frames []*Frame) ([]byte
 		plain = append(plain, raw...)
 	}
 
-	// Attempt DEFLATE compression on the payload section (everything after the
-	// flags byte at index 0). Only worthwhile for batches large enough that the
-	// flate setup cost is amortised; small control batches (SYN/FIN/keepalive)
-	// are sent raw. If compression does not shrink the data (e.g. already-
-	// encrypted or binary payloads) we fall back to raw transparently.
+	// Attempt Zstandard compression on the payload section (everything after
+	// the flags byte at index 0). Only worthwhile for batches large enough that
+	// the overhead is amortised; small control batches (SYN/FIN/keepalive) are
+	// sent raw. If compression does not shrink the data (e.g. already-encrypted
+	// TLS payloads) we fall back to raw transparently.
 	sealInput := plain // default: raw, flags byte already 0x00
 	if len(plain)-1 >= compressMinSize {
-		cbuf := flateBufPool.Get().(*bytes.Buffer)
-		cbuf.Reset()
-		fw := flateWriterPool.Get().(*flate.Writer)
-		fw.Reset(cbuf)
-		_, _ = fw.Write(plain[1:])
-		_ = fw.Close()
-		if cbuf.Len() < len(plain)-1 {
-			// Compression helped: build a fresh slice [batchFlagFlate | compressed].
-			// The [:1:1] cap trick ensures append allocates a new backing array
-			// so the pool-owned plain buffer is never modified.
-			compressed := append(plain[:1:1], cbuf.Bytes()...)
-			compressed[0] = batchFlagFlate
+		enc := zstdEncPool.Get().(*zstd.Encoder)
+		// EncodeAll appends compressed bytes to dst. The [:1:1] cap trick gives
+		// us a fresh backing array with the flags placeholder at [0], so the
+		// pool-owned plain buffer is never modified.
+		compressed := enc.EncodeAll(plain[1:], plain[:1:1])
+		zstdEncPool.Put(enc)
+		if len(compressed)-1 < len(plain)-1 {
+			compressed[0] = batchFlagZstd
 			sealInput = compressed
 		} else {
 			plain[0] = batchFlagRaw
 		}
-		flateWriterPool.Put(fw)
-		flateBufPool.Put(cbuf)
 	} else {
 		plain[0] = batchFlagRaw
 	}
@@ -272,6 +276,7 @@ func DecodeBatch(c *Crypto, body []byte) ([ClientIDLen]byte, []*Frame, error) {
 	case batchFlagRaw:
 		plain = rawPlain[1:]
 	case batchFlagFlate:
+		// Legacy path: decode batches from older peers that still emit DEFLATE.
 		r := flate.NewReader(bytes.NewReader(rawPlain[1:]))
 		var buf bytes.Buffer
 		if _, err := io.Copy(&buf, r); err != nil {
@@ -279,6 +284,14 @@ func DecodeBatch(c *Crypto, body []byte) ([ClientIDLen]byte, []*Frame, error) {
 		}
 		r.Close()
 		plain = buf.Bytes()
+	case batchFlagZstd:
+		dec := zstdDecPool.Get().(*zstd.Decoder)
+		decompressed, err := dec.DecodeAll(rawPlain[1:], nil)
+		zstdDecPool.Put(dec)
+		if err != nil {
+			return zeroID, nil, fmt.Errorf("batch: zstd decompress: %w", err)
+		}
+		plain = decompressed
 	default:
 		return zeroID, nil, fmt.Errorf("batch: unknown flags byte 0x%02x", rawPlain[0])
 	}

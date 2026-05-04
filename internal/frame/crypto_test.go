@@ -2,6 +2,7 @@ package frame
 
 import (
 	"bytes"
+	"compress/flate"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -239,4 +240,131 @@ func TestEncodeDecodeBatch_Compressed(t *testing.T) {
 	if len(body) >= plainSize {
 		t.Logf("note: wire body (%d) not smaller than estimated uncompressed (%d) — check threshold", len(body), plainSize)
 	}
+}
+
+// TestZstdFlagEmitted verifies that batches large enough to compress are
+// sealed with batchFlagZstd (0x02) and not with the old batchFlagFlate (0x01).
+// It also checks that round-tripping through DecodeBatch produces identical
+// frames, and that the zstd wire body is strictly smaller than the raw body.
+func TestZstdFlagEmitted(t *testing.T) {
+	c := newTestCrypto(t)
+
+	// Highly compressible payload well above compressMinSize.
+	payload := bytes.Repeat([]byte("GooseRelayVPN zstd test payload — repeated for compressibility. "), 20)
+	if len(payload) < compressMinSize {
+		t.Fatalf("payload too small to trigger compression: %d < %d", len(payload), compressMinSize)
+	}
+
+	frames := []*Frame{
+		{SessionID: sid(1), Seq: 0, Flags: FlagSYN, Target: "example.com:443", Payload: payload},
+		{SessionID: sid(1), Seq: 1, Payload: payload},
+		{SessionID: sid(1), Seq: 2, Payload: payload},
+	}
+	var clientID [ClientIDLen]byte
+	for i := range clientID {
+		clientID[i] = byte(i + 1)
+	}
+
+	body, err := EncodeBatch(c, clientID, frames)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	// Peek inside: base64-decode then AES-decrypt to read the flags byte.
+	trimmed := bytes.TrimRight(bytes.TrimSpace(body), "=")
+	sealed := make([]byte, b64Encoding.DecodedLen(len(trimmed)))
+	n, err := b64Encoding.Decode(sealed, trimmed)
+	if err != nil {
+		t.Fatalf("base64 decode: %v", err)
+	}
+	rawPlain, err := c.Open(sealed[:n])
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if len(rawPlain) == 0 {
+		t.Fatal("empty plaintext after open")
+	}
+	if rawPlain[0] != batchFlagZstd {
+		t.Errorf("flags byte = 0x%02x, want batchFlagZstd (0x%02x)", rawPlain[0], batchFlagZstd)
+	}
+	t.Logf("flags byte = 0x%02x (zstd) ✓", rawPlain[0])
+
+	// Round-trip must reproduce identical frames.
+	gotClient, out, err := DecodeBatch(c, body)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if gotClient != clientID {
+		t.Fatalf("clientID mismatch: got %x want %x", gotClient, clientID)
+	}
+	if len(out) != len(frames) {
+		t.Fatalf("frame count: got %d want %d", len(out), len(frames))
+	}
+	for i, f := range frames {
+		if out[i].SessionID != f.SessionID || out[i].Seq != f.Seq ||
+			out[i].Flags != f.Flags || out[i].Target != f.Target {
+			t.Fatalf("frame %d header mismatch", i)
+		}
+		if !bytes.Equal(out[i].Payload, f.Payload) {
+			t.Fatalf("frame %d payload mismatch", i)
+		}
+	}
+
+	// zstd wire body must be smaller than the estimated raw size.
+	rawEstimate := 1 + ClientIDLen + 2 + len(frames)*(4+SessionIDLen+8+1+1+4+len(payload))
+	ratio := 100.0 * float64(len(body)) / float64(rawEstimate)
+	t.Logf("wire body = %d bytes, raw estimate = %d bytes, ratio = %.1f%% (%.1f%% reduction)",
+		len(body), rawEstimate, ratio, 100-ratio)
+	if len(body) >= rawEstimate {
+		t.Errorf("zstd body (%d) is not smaller than raw estimate (%d) — compression did not fire or helped nothing",
+			len(body), rawEstimate)
+	}
+}
+
+// TestZstdLegacyFlateStillDecodes verifies the backward-compat path: a batch
+// encoded with the old batchFlagFlate (0x01) is still correctly decoded.
+func TestZstdLegacyFlateStillDecodes(t *testing.T) {
+	c := newTestCrypto(t)
+	payload := bytes.Repeat([]byte("legacy flate payload "), 40)
+
+	// Manually build a batchFlagFlate batch.
+	f := &Frame{SessionID: sid(5), Seq: 42, Payload: payload}
+	rawFrame, err := f.Marshal()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Build the uncompressed plaintext header.
+	plain := make([]byte, 0)
+	plain = append(plain, batchFlagFlate)
+	plain = append(plain, make([]byte, ClientIDLen)...)
+	plain = append(plain, 0, 1) // 1 frame
+	plain = append(plain,
+		byte(len(rawFrame)>>24), byte(len(rawFrame)>>16),
+		byte(len(rawFrame)>>8), byte(len(rawFrame)))
+	plain = append(plain, rawFrame...)
+
+	// Compress plain[1:] with flate to produce the legacy wire format.
+	var cbuf bytes.Buffer
+	fw, _ := flate.NewWriter(&cbuf, flate.BestSpeed)
+	_, _ = fw.Write(plain[1:])
+	_ = fw.Close()
+	legacyPlain := append(plain[:1:1], cbuf.Bytes()...)
+	legacyPlain[0] = batchFlagFlate
+
+	sealed, err := c.Seal(legacyPlain)
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	encoded := make([]byte, b64Encoding.EncodedLen(len(sealed)))
+	b64Encoding.Encode(encoded, sealed)
+
+	_, out, err := DecodeBatch(c, encoded)
+	if err != nil {
+		t.Fatalf("legacy flate decode: %v", err)
+	}
+	if len(out) != 1 || out[0].Seq != 42 || !bytes.Equal(out[0].Payload, payload) {
+		t.Fatal("legacy flate round-trip payload mismatch")
+	}
+	t.Log("legacy batchFlagFlate decoded correctly ✓")
 }
