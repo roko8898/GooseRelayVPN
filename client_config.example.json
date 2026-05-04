@@ -12,5 +12,8 @@
 
   "_comment_socks_auth": "Optional: require SOCKS5 username/password (RFC 1929). Both fields must be set together or both omitted.",
   "socks_user": "",
-  "socks_pass": ""
+  "socks_pass": "",
+
+  "_comment_coalesce": "Optional: adaptive uplink coalescing. Set coalesce_step_ms to a positive number to make a burst of TX operations wait a little for more operations before sending, which reduces Apps Script calls. Set it to 0 to turn coalescing off.",
+  "coalesce_step_ms": 0
 }

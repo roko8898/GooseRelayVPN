@@ -391,6 +391,7 @@ What the client does for you automatically:
 | `tunnel_key` | — | 64-char hex AES-256 key. Must match the server byte-for-byte. |
 | `socks_user` | *(optional)* | SOCKS5 username (RFC 1929). When set, clients must authenticate or the connection is rejected. Must be paired with `socks_pass` — set both or neither. |
 | `socks_pass` | *(optional)* | SOCKS5 password paired with `socks_user`. |
+| `coalesce_step_ms` | `0` (off) | Adaptive uplink coalescing. Set it to a positive number to make the first kick of a burst of TX operations wait a little for more operations; each new operation resets the timer. This trades a bit of latency for fewer Apps Script calls. Set it to `0` to turn coalescing off. The internal safety cap is derived automatically from this value. |
 
 ### Server (`server_config.json`)
 

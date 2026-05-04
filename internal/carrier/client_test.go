@@ -318,6 +318,161 @@ func TestCarrier_PureDownloadIdleCap(t *testing.T) {
 	}
 }
 
+// TestCarrier_KickCoalesceDisabled verifies kick() broadcasts immediately
+// when adaptive coalescing is off (default). A worker waiting on the wake
+// channel must observe the broadcast without any added delay.
+func TestCarrier_KickCoalesceDisabled(t *testing.T) {
+	c, err := New(Config{
+		ScriptURLs: []string{"http://example.invalid/exec"},
+		AESKeyHex:  testKeyHex,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	wakeCh := c.wake.C()
+	start := time.Now()
+	c.kick()
+	select {
+	case <-wakeCh:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatalf("wake not received within 50ms (coalescing should be disabled)")
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Millisecond {
+		t.Errorf("immediate kick took %v, want < 10ms", elapsed)
+	}
+}
+
+// TestCarrier_KickCoalesceDelaysSingleKick verifies a lone kick is delayed
+// by approximately coalesceStep before the wake fires.
+func TestCarrier_KickCoalesceDelaysSingleKick(t *testing.T) {
+	step := 30 * time.Millisecond
+	c, err := New(Config{
+		ScriptURLs:   []string{"http://example.invalid/exec"},
+		AESKeyHex:    testKeyHex,
+		CoalesceStep: step,
+		CoalesceMax:  500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	wakeCh := c.wake.C()
+	start := time.Now()
+	c.kick()
+	select {
+	case <-wakeCh:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("wake never fired")
+	}
+	elapsed := time.Since(start)
+	if elapsed < step-5*time.Millisecond {
+		t.Errorf("wake fired too early: %v < step %v", elapsed, step)
+	}
+	if elapsed > step+50*time.Millisecond {
+		t.Errorf("wake fired too late: %v >> step %v", elapsed, step)
+	}
+}
+
+// TestCarrier_KickCoalesceResetsOnBurst verifies that successive kicks within
+// the step window reset the timer so the wake fires step after the LAST kick,
+// collapsing the whole burst into one wake.
+func TestCarrier_KickCoalesceResetsOnBurst(t *testing.T) {
+	step := 40 * time.Millisecond
+	c, err := New(Config{
+		ScriptURLs:   []string{"http://example.invalid/exec"},
+		AESKeyHex:    testKeyHex,
+		CoalesceStep: step,
+		CoalesceMax:  500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	wakeCh := c.wake.C()
+	start := time.Now()
+
+	// Kick three times spaced step/2 apart: each kick resets the timer, so
+	// the wake should fire ~step after the last kick (~2*step total).
+	c.kick()
+	time.Sleep(step / 2)
+	c.kick()
+	time.Sleep(step / 2)
+	c.kick()
+	lastKick := time.Now()
+
+	select {
+	case <-wakeCh:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("wake never fired")
+	}
+	sinceLast := time.Since(lastKick)
+	if sinceLast < step-10*time.Millisecond {
+		t.Errorf("wake fired %v after last kick, want >= step %v", sinceLast, step)
+	}
+	totalElapsed := time.Since(start)
+	if totalElapsed < 2*step-10*time.Millisecond {
+		t.Errorf("burst collapsed too early: total %v, expected at least 2*step %v", totalElapsed, 2*step)
+	}
+}
+
+// TestCarrier_KickCoalesceHardCap verifies that continuous kicks past the
+// hard deadline still let the wake fire near coalesceMax — a steady stream
+// cannot starve the workers indefinitely.
+func TestCarrier_KickCoalesceHardCap(t *testing.T) {
+	step := 20 * time.Millisecond
+	max := 100 * time.Millisecond
+	c, err := New(Config{
+		ScriptURLs:   []string{"http://example.invalid/exec"},
+		AESKeyHex:    testKeyHex,
+		CoalesceStep: step,
+		CoalesceMax:  max,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	wakeCh := c.wake.C()
+	start := time.Now()
+
+	// Kick continuously every step/2 for longer than max; the hard cap should
+	// fire the wake despite the constant resets.
+	stopKicking := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(step / 2)
+		defer ticker.Stop()
+		c.kick()
+		for {
+			select {
+			case <-stopKicking:
+				return
+			case <-ticker.C:
+				c.kick()
+			}
+		}
+	}()
+
+	select {
+	case <-wakeCh:
+	case <-time.After(2 * max):
+		close(stopKicking)
+		<-done
+		t.Fatalf("wake never fired despite hard cap of %v", max)
+	}
+	close(stopKicking)
+	<-done
+
+	elapsed := time.Since(start)
+	if elapsed < max-10*time.Millisecond {
+		t.Errorf("wake fired before hard cap: %v < %v", elapsed, max)
+	}
+	if elapsed > max+50*time.Millisecond {
+		t.Errorf("wake fired well past hard cap: %v > %v", elapsed, max)
+	}
+}
+
 // TestCarrier_IdleBackoffSchedule guards the adaptive backoff curve so a
 // future "tweak" cannot accidentally regress to a tight 10ms loop on idle
 // workers (the upload-amplification half of issue #41).

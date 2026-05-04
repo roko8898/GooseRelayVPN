@@ -26,6 +26,13 @@ type Client struct {
 	DebugTiming bool   // when true, log per-session TTFB and per-poll Apps Script RTT
 	SocksUser   string // optional SOCKS5 username (RFC 1929); empty = no auth
 	SocksPass   string // optional SOCKS5 password (RFC 1929); empty = no auth
+
+	// Adaptive uplink coalescing. When CoalesceStepMs > 0, the carrier waits
+	// up to that many ms for more TX ops to arrive before sending, resetting
+	// the timer on each new op. Bursts collapse into a single poll. Off by
+	// default (=0). The hard cap (~step × 25) is internal.
+	CoalesceStepMs int
+	CoalesceMaxMs  int
 }
 
 // clientFile is the user-friendly client config format.
@@ -64,6 +71,12 @@ type clientFile struct {
 	// together — setting only one is an error.
 	SocksUser string `json:"socks_user"`
 	SocksPass string `json:"socks_pass"`
+
+	// Optional adaptive uplink coalescing. Both 0 = disabled (default).
+	// coalesce_step_ms: wait time for a burst of TX operation(s). Each new
+	// operation resets the timer. Set it to 0 to disable coalescing. The
+	// internal safety cap is derived from this value and is not user-configurable.
+	CoalesceStepMs int `json:"coalesce_step_ms"`
 }
 
 func firstNonEmpty(values ...string) string {
@@ -292,16 +305,26 @@ func LoadClient(path string) (*Client, error) {
 		return nil, fmt.Errorf("socks_user and socks_pass must both be set or both be empty in %s", path)
 	}
 
+	if f.CoalesceStepMs < 0 {
+		return nil, fmt.Errorf("coalesce_step_ms must be >= 0 in %s (got %d)", path, f.CoalesceStepMs)
+	}
+	coalesceMax := 0
+	if f.CoalesceStepMs > 0 {
+		coalesceMax = f.CoalesceStepMs * 25
+	}
+
 	c := Client{
-		ListenAddr:  net.JoinHostPort(listenHost, strconv.Itoa(listenPort)),
-		GoogleIP:    googleIP,
-		SNIHosts:    sniHosts,
-		ScriptURLs:  scriptURLs,
-		UseFronting: useFronting,
-		AESKeyHex:   key,
-		DebugTiming: f.DebugTiming,
-		SocksUser:   socksUser,
-		SocksPass:   socksPass,
+		ListenAddr:     net.JoinHostPort(listenHost, strconv.Itoa(listenPort)),
+		GoogleIP:       googleIP,
+		SNIHosts:       sniHosts,
+		ScriptURLs:     scriptURLs,
+		UseFronting:    useFronting,
+		AESKeyHex:      key,
+		DebugTiming:    f.DebugTiming,
+		SocksUser:      socksUser,
+		SocksPass:      socksPass,
+		CoalesceStepMs: f.CoalesceStepMs,
+		CoalesceMaxMs:  coalesceMax,
 	}
 	return &c, nil
 }

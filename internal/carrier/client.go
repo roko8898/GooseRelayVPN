@@ -73,6 +73,13 @@ type Config struct {
 	Fronting    FrontingConfig
 	AESKeyHex   string // 64-char hex, must match server
 	DebugTiming bool   // when true, log per-session TTFB and per-poll Apps Script RTT
+
+	// CoalesceStep / CoalesceMax enable adaptive uplink coalescing on kick().
+	// When CoalesceStep > 0 the first kick of a burst arms a step timer; each
+	// subsequent kick within the window resets it, bounded by CoalesceMax from
+	// the first kick. Bursts collapse into a single wake. Both 0 = disabled.
+	CoalesceStep time.Duration
+	CoalesceMax  time.Duration
 }
 
 type relayEndpoint struct {
@@ -147,6 +154,14 @@ type Client struct {
 
 	wake  *waker // broadcasts to all idle poll goroutines simultaneously
 	stats clientStats
+
+	// Adaptive kick coalescing (see Config.CoalesceStep/Max). When step <= 0
+	// these fields are unused and kick() broadcasts immediately.
+	coalesceStep time.Duration
+	coalesceMax  time.Duration
+	coalesceMu   sync.Mutex
+	coalesceTimer    *time.Timer // armed during a coalesce window; nil otherwise
+	coalesceDeadline time.Time   // hard cap for the in-flight window
 }
 
 // clientStats holds atomic counters surfaced periodically by statsLoop.
@@ -196,17 +211,19 @@ func New(cfg Config) (*Client, error) {
 	}
 
 	return &Client{
-		cfg:         cfg,
-		aead:        aead,
-		httpClients: NewFrontedClients(cfg.Fronting, pollTimeout, endpoints[0].url),
-		debugTiming: cfg.DebugTiming,
-		numWorkers:  workersPerEndpoint * len(endpoints),
-		clientID:    clientID,
-		sessions:    make(map[[frame.SessionIDLen]byte]*session.Session),
-		inFlight:    make(map[[frame.SessionIDLen]byte]bool),
-		txReady:     make(map[[frame.SessionIDLen]byte]struct{}),
-		endpoints:   endpoints,
-		wake:        newWaker(),
+		cfg:          cfg,
+		aead:         aead,
+		httpClients:  NewFrontedClients(cfg.Fronting, pollTimeout, endpoints[0].url),
+		debugTiming:  cfg.DebugTiming,
+		numWorkers:   workersPerEndpoint * len(endpoints),
+		clientID:     clientID,
+		sessions:     make(map[[frame.SessionIDLen]byte]*session.Session),
+		inFlight:     make(map[[frame.SessionIDLen]byte]bool),
+		txReady:      make(map[[frame.SessionIDLen]byte]struct{}),
+		endpoints:    endpoints,
+		wake:         newWaker(),
+		coalesceStep: cfg.CoalesceStep,
+		coalesceMax:  cfg.CoalesceMax,
 	}, nil
 }
 
@@ -864,7 +881,49 @@ func (c *Client) releaseIdlePollSlot() {
 }
 
 // kick broadcasts to all idle poll workers. Safe to call from any goroutine.
+//
+// When adaptive coalescing is enabled (coalesceStep > 0) kicks within a
+// burst are collapsed into a single delayed wake: the first kick arms a
+// step-ms timer and records a hard deadline (now + coalesceMax); subsequent
+// kicks reset the step timer (capped at the hard deadline) so a steady
+// stream of arrivals does not delay the wake past coalesceMax. When step
+// is 0 the wake fires immediately as before.
 func (c *Client) kick() {
+	if c.coalesceStep <= 0 {
+		c.wake.Broadcast()
+		return
+	}
+
+	c.coalesceMu.Lock()
+	defer c.coalesceMu.Unlock()
+
+	now := time.Now()
+	if c.coalesceTimer == nil {
+		// First kick of a burst: set hard deadline and arm the step timer.
+		c.coalesceDeadline = now.Add(c.coalesceMax)
+		c.coalesceTimer = time.AfterFunc(c.coalesceStep, c.fireCoalesceWake)
+		return
+	}
+
+	// Subsequent kick: extend the step timer, but never past the hard cap.
+	nextFire := now.Add(c.coalesceStep)
+	if nextFire.After(c.coalesceDeadline) {
+		nextFire = c.coalesceDeadline
+	}
+	wait := nextFire.Sub(now)
+	if wait <= 0 {
+		// Already at or past the hard deadline — let the existing timer fire.
+		return
+	}
+	c.coalesceTimer.Reset(wait)
+}
+
+// fireCoalesceWake clears the timer and broadcasts the wake. Called from
+// the time.AfterFunc goroutine when the coalesce window closes.
+func (c *Client) fireCoalesceWake() {
+	c.coalesceMu.Lock()
+	c.coalesceTimer = nil
+	c.coalesceMu.Unlock()
 	c.wake.Broadcast()
 }
 
