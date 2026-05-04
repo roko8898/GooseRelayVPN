@@ -33,11 +33,13 @@ type SessionFactory func(target string) *session.Session
 // Blocks until ListenAndServe returns. Caller passes ctx for shutdown
 // signaling (the underlying go-socks5 library doesn't take a ctx, so this
 // just wires it through for parity with the rest of the codebase).
-func Serve(_ context.Context, listenAddr, user, pass string, factory SessionFactory) error {
+func Serve(_ context.Context, listenAddr, user, pass string, debugTiming bool, factory SessionFactory) error {
 	opts := []socks5.Option{
 		socks5.WithDial(func(_ context.Context, _, addr string) (net.Conn, error) {
 			s := factory(addr)
-			log.Printf("[socks] new session %x for %s", s.ID[:4], addr)
+			if debugTiming {
+				log.Printf("[socks] new session %x for %s", s.ID[:4], addr)
+			}
 			return NewVirtualConn(s), nil
 		}),
 		socks5.WithAssociateHandle(func(_ context.Context, w io.Writer, _ *socks5.Request) error {
