@@ -14,6 +14,6 @@
   "socks_user": "",
   "socks_pass": "",
 
-  "_comment_coalesce": "Optional: adaptive uplink coalescing. Set coalesce_step_ms to a positive number to make a burst of TX operations wait a little for more operations before sending, which reduces Apps Script calls. Set it to 0 to turn coalescing off.",
+  "_comment_coalesce": "Optional: adaptive uplink coalescing. Set coalesce_step_ms to a positive number to make a burst of TX operations wait a little for more operations before sending, which reduces Apps Script calls. A good starting range is 20-40 ms. Set it to 0 to turn coalescing off.",
   "coalesce_step_ms": 0
 }
