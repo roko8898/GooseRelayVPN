@@ -38,7 +38,7 @@ func (c *Client) logStats() {
 	endpointDetail := c.endpointStatsLine()
 	accountSummary := c.accountStatsLine()
 
-	log.Printf("[stats] active=%d sessions(open=%d close=%d) frames(out=%d in=%d) bytes(out=%s in=%s) polls(ok=%d fail=%d) rst=%d endpoints=%d/%d_healthy endpoints=[%s]%s",
+	log.Printf("[stats] active=%d sessions=%d/%d frames=%d/%d bytes=%s/%s polls=%d/%d rst=%d endpoints=%d/%d",
 		active,
 		c.stats.sessionsOpen.Load(), c.stats.sessionsClose.Load(),
 		c.stats.framesOut.Load(), c.stats.framesIn.Load(),
@@ -46,9 +46,11 @@ func (c *Client) logStats() {
 		c.stats.pollsOK.Load(), c.stats.pollsFail.Load(),
 		c.stats.rstFromServer.Load(),
 		healthy, total,
-		endpointDetail,
-		accountSummary,
 	)
+	log.Printf("[stats] endpoints: %s", endpointDetail)
+	if accountSummary != "" {
+		log.Printf("[stats] %s", strings.TrimSpace(accountSummary))
+	}
 }
 
 func (c *Client) endpointHealthCounts() (healthy, total int) {

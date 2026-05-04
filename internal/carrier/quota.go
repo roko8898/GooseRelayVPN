@@ -73,10 +73,10 @@ func (c *Client) bumpDailyCount(endpointIdx int) {
 
 const (
 	// scriptStatsInterval is how often we GET /exec on each deployment to
-	// read its self-reported daily count. Hourly is the cadence requested
-	// in issue #55 and adds only ~24 invocations/day per deployment to the
-	// quota — negligible against the ~20k/day account budget.
-	scriptStatsInterval = time.Hour
+	// read its self-reported daily count. Every 30 minutes adds ~48
+	// invocations/day per deployment — still negligible against the
+	// ~20k/day account budget.
+	scriptStatsInterval = 30 * time.Minute
 
 	// scriptStatsInitialDelay lets the carrier warm up before the first
 	// fetch so startup logs aren't interleaved with stats fetches.
@@ -151,7 +151,7 @@ func (c *Client) fetchScriptStats(ctx context.Context, idx int, url string) {
 	resp, err := c.pickHTTPClient().Do(req)
 	if err != nil {
 		// Transport error — don't bump the daily count (request never reached
-		// Apps Script) and don't log; the next hour will retry.
+		// Apps Script) and don't log; the next interval will retry.
 		return
 	}
 	defer resp.Body.Close()
