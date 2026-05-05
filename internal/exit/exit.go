@@ -657,7 +657,16 @@ func (s *Server) drainAll(owner [frame.ClientIDLen]byte, byteBudget int) ([]*fra
 			perSessionCap = remaining
 		}
 		frames := sess.DrainTxLimited(MaxFramePayload, perSessionCap)
-		delete(s.txReady, id) // OnTx re-adds if more data arrives
+		// Only clear from txReady when fully drained. A partial drain (cap
+		// hit before all data + a trailing FIN could be emitted) needs to
+		// stay queued, otherwise the session is stranded with no path back
+		// into drainAll — OnTx only fires on new EnqueueTx/RequestClose, not
+		// on leftover bytes — and the FIN never reaches the client until the
+		// 10-minute idle GC reaps it. That's why ~270 closed sessions linger
+		// in s.sessions as zombies under sustained load.
+		if !sess.HasPendingTx() {
+			delete(s.txReady, id)
+		}
 		if len(frames) > 0 {
 			if _, isFirst := s.firstReply[id]; isFirst {
 				urgent = true
