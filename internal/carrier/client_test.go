@@ -523,8 +523,15 @@ func TestCarrier_KickCoalesceResetsOnBurst(t *testing.T) {
 // hard deadline still let the wake fire near coalesceMax — a steady stream
 // cannot starve the workers indefinitely.
 func TestCarrier_KickCoalesceHardCap(t *testing.T) {
-	step := 20 * time.Millisecond
-	max := 100 * time.Millisecond
+	// Step and kick interval are deliberately well above Windows' default
+	// timer resolution (~15.6ms). A tighter budget (step=20ms, kicks every
+	// 10ms) flakes on windows-latest because the ticker can't actually fire
+	// faster than the step, so the step timer fires at ~step instead of
+	// waiting for the hard cap and the test reads "wake fired before hard
+	// cap." With step=50ms / kick every 25ms, even a 30ms-jitter Windows
+	// tick still resets the step before it expires.
+	step := 50 * time.Millisecond
+	max := 200 * time.Millisecond
 	c, err := New(Config{
 		ScriptURLs:   []string{"http://example.invalid/exec"},
 		AESKeyHex:    testKeyHex,
