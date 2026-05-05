@@ -159,7 +159,7 @@ type Client struct {
 	httpClients        []*http.Client // one per SNI host; round-robined per request
 	nextHTTP           atomic.Uint64  // round-robin index into httpClients
 	debugTiming        bool
-	numWorkers         int // workersPerEndpoint × bucketCount
+	numWorkers         int // (workersPerEndpoint + idleSlotsPerBucket - 1) × bucketCount
 	bucketCount        int // distinct account labels in endpoints; unlabeled all share one bucket
 	idleSlotsPerBucket int // resolved from Config.IdleSlotsPerBucket, default 1
 
@@ -264,11 +264,19 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("crypto/rand: %w", err)
 	}
 
-	numWorkers := workersPerEndpoint * bucketCount
 	idleSlotsPerBucket := cfg.IdleSlotsPerBucket
 	if idleSlotsPerBucket <= 0 {
 		idleSlotsPerBucket = 1
 	}
+	// Worker count scales with idleSlotsPerBucket so the TX pool isn't
+	// drained when the user opts up the RX cap. With workersPerEndpoint=3
+	// and idleSlotsPerBucket=1, this reduces to the old 3×bucketCount.
+	// At idleSlotsPerBucket=2, each bucket gets +1 worker so the same
+	// number of workers stay free for TX after the extra idle slot is
+	// camped — the alternative (fixed worker count) starves session
+	// establishment under TX bursts when more workers are tied to long
+	// polls.
+	numWorkers := (workersPerEndpoint + idleSlotsPerBucket - 1) * bucketCount
 	log.Printf("[carrier] %d worker(s) across %d account bucket(s) (%d endpoint(s)), %d idle slot(s)/bucket",
 		numWorkers, bucketCount, len(endpoints), idleSlotsPerBucket)
 	if labeled == 0 && len(endpoints) > 1 {

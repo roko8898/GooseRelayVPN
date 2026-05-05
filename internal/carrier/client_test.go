@@ -357,9 +357,11 @@ func TestCarrier_IdleSlotsPerBucket(t *testing.T) {
 	defer srv.Close()
 
 	// 4 endpoints, 2 distinct accounts (A,A,B,B), IdleSlotsPerBucket=2:
-	//   bucketCount=2, numWorkers=workersPerEndpoint×2=6,
-	//   idleCap=bucketCount×IdleSlotsPerBucket=4.
-	// Default IdleSlotsPerBucket=1 would cap at 2; the knob should lift it.
+	//   bucketCount=2, idleCap=bucketCount×IdleSlotsPerBucket=4,
+	//   numWorkers=(workersPerEndpoint+IdleSlotsPerBucket-1)×bucketCount=8.
+	// The +1 worker per bucket preserves TX capacity when the extra idle
+	// slot camps an additional worker on a long-poll. Default
+	// IdleSlotsPerBucket=1 would cap at 2 idle slots and 6 workers.
 	urls := []string{srv.URL + "/a", srv.URL + "/b", srv.URL + "/c", srv.URL + "/d"}
 	accounts := []string{"A", "A", "B", "B"}
 	c, err := New(Config{
