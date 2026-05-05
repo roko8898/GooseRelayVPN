@@ -264,13 +264,16 @@ func TestCarrier_PureDownloadIdleCap(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Four distinct endpoints → numWorkers = workersPerEndpoint × 4 = 12.
-	// Pre-fix idleCap in pure-download mode would have been 11. New cap is
-	// max(pureDownloadIdleCap, len(endpoints)) = max(2, 4) = 4.
+	// Four endpoints labeled under four distinct accounts → bucketCount = 4,
+	// numWorkers = workersPerEndpoint × 4 = 12. Pre-fix idleCap would have been
+	// numWorkers-1 = 11; new cap is max(pureDownloadIdleCap, bucketCount) = 4.
+	// Labeling matters: with no labels these would collapse to one bucket and
+	// the test wouldn't exercise the cap.
 	urls := []string{
 		srv.URL + "/a", srv.URL + "/b", srv.URL + "/c", srv.URL + "/d",
 	}
-	c, err := New(Config{ScriptURLs: urls, AESKeyHex: testKeyHex})
+	accounts := []string{"A", "B", "C", "D"}
+	c, err := New(Config{ScriptURLs: urls, ScriptAccounts: accounts, AESKeyHex: testKeyHex})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
@@ -305,13 +308,13 @@ func TestCarrier_PureDownloadIdleCap(t *testing.T) {
 	mu.Unlock()
 
 	wantCap := pureDownloadIdleCap
-	if len(c.endpoints) > wantCap {
-		wantCap = len(c.endpoints)
+	if c.bucketCount > wantCap {
+		wantCap = c.bucketCount
 	}
 	if gotPeak > wantCap {
 		t.Fatalf("peak concurrent idle long-polls = %d, want ≤ %d "+
-			"(numWorkers=%d, len(endpoints)=%d, totalReq=%d)",
-			gotPeak, wantCap, c.numWorkers, len(c.endpoints), gotTotal)
+			"(numWorkers=%d, buckets=%d, len(endpoints)=%d, totalReq=%d)",
+			gotPeak, wantCap, c.numWorkers, c.bucketCount, len(c.endpoints), gotTotal)
 	}
 	if gotPeak == 0 {
 		t.Fatal("no polls were issued; test did not exercise the cap")

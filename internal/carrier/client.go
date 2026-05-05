@@ -153,7 +153,8 @@ type Client struct {
 	httpClients []*http.Client // one per SNI host; round-robined per request
 	nextHTTP    atomic.Uint64  // round-robin index into httpClients
 	debugTiming bool
-	numWorkers  int // workersPerEndpoint × len(endpoints)
+	numWorkers  int // workersPerEndpoint × bucketCount
+	bucketCount int // distinct account labels in endpoints; unlabeled all share one bucket
 
 	// clientID is a random 16-byte identifier minted once per process. It is
 	// embedded in every encrypted batch so the server can route downstream
@@ -232,6 +233,23 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("at least one script URL is required")
 	}
 
+	// Concurrency scales with distinct Google account "buckets", not endpoint
+	// count. Apps Script's per-second concurrency cap and ~20k UrlFetchApp/day
+	// quota are per-account: scaling workers/idle-slots by endpoint count
+	// (pre-fix behavior) overloads users who deploy multiple IDs under one
+	// account, causing Apps Script to return HTML error pages instead of the
+	// encrypted batch (issue #56). Unlabeled endpoints all share one anonymous
+	// bucket so legacy configs default to v1.2.0-equivalent load.
+	accountSeen := make(map[string]struct{}, len(endpoints))
+	labeled := 0
+	for _, ep := range endpoints {
+		accountSeen[ep.account] = struct{}{}
+		if ep.account != "" {
+			labeled++
+		}
+	}
+	bucketCount := len(accountSeen)
+
 	var clientID [frame.ClientIDLen]byte
 	if _, err := rand.Read(clientID[:]); err != nil {
 		// crypto/rand failure is unrecoverable; fail fast rather than emitting
@@ -239,12 +257,23 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("crypto/rand: %w", err)
 	}
 
+	numWorkers := workersPerEndpoint * bucketCount
+	log.Printf("[carrier] %d worker(s) across %d account bucket(s) (%d endpoint(s))",
+		numWorkers, bucketCount, len(endpoints))
+	if labeled == 0 && len(endpoints) > 1 {
+		log.Printf("[carrier] WARN: %d deployments configured with no account labels — treating as one bucket. "+
+			"If these deployments are under different Google accounts, label them in script_keys "+
+			"as {\"id\": \"...\", \"account\": \"A\"} to unlock per-account parallelism.",
+			len(endpoints))
+	}
+
 	return &Client{
 		cfg:              cfg,
 		aead:             aead,
 		httpClients:      NewFrontedClients(cfg.Fronting, pollTimeout, endpoints[0].url),
 		debugTiming:      cfg.DebugTiming,
-		numWorkers:       workersPerEndpoint * len(endpoints),
+		numWorkers:       numWorkers,
+		bucketCount:      bucketCount,
 		clientID:         clientID,
 		sessions:         make(map[[frame.SessionIDLen]byte]*session.Session),
 		inFlight:         make(map[[frame.SessionIDLen]byte]bool),
@@ -422,19 +451,21 @@ func (c *Client) pollOnce(ctx context.Context) bool {
 	}
 	isIdlePoll := len(frames) == 0
 	if isIdlePoll {
-		// Allow one idle long-poll slot per endpoint so each deployment can push
-		// downstream data concurrently. In pure-download mode (no pending TX)
-		// the previous setting was numWorkers-1 — every downstream chunk woke
-		// every long-poll while only one received it, so the rest re-POSTed
-		// empty bodies and amplified upload bandwidth N-fold (issue #41). Cap
-		// pure-download mode to one slot per endpoint (max of pureDownloadIdleCap
-		// and len(endpoints)): each deployment gets exactly one standing poll to
-		// receive pushes. A fixed cap of 2 (issue #41 fix) under-provisioned
-		// multi-endpoint configs — only 2 of 4+ deployments received data at a
-		// time, causing throughput to collapse after initial SYNs completed
-		// (~15 s into a stream, issue #73).
+		// Allow one idle long-poll slot per *account bucket* so each Google
+		// account's quota gets exactly one standing poll for downstream push.
+		// History: a fixed cap of 1 (v1.2.0) starved multi-deployment configs
+		// of downstream throughput. Issue #41's fix raised the cap to
+		// numWorkers-1, which then woke every long-poll on every chunk and
+		// amplified upload bandwidth N-fold. Issue #73's fix capped it at
+		// max(2, len(endpoints)) so each deployment got a slot — but when
+		// multiple deployments shared one Google account, that overloaded
+		// the account's per-second concurrency cap and Apps Script returned
+		// HTML error pages (issue #56). Scaling by bucket count instead of
+		// endpoint count gives each *quota account* one slot, which is the
+		// natural unit Apps Script throttles on. pureDownloadIdleCap=2 keeps
+		// a single-bucket config from regressing to a single standing poll.
 		c.mu.Lock()
-		idleCap := len(c.endpoints)
+		idleCap := c.bucketCount
 		if len(c.txReady) == 0 && idleCap < pureDownloadIdleCap {
 			idleCap = pureDownloadIdleCap
 		}
