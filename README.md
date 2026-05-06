@@ -394,15 +394,6 @@ By default the client listens on `127.0.0.1:1080` so only your computer can use 
 
 The **~20,000 calls/day quota applies per Google account**, not per deployment or project — all deployments under the same account share one quota pool. The client polls about once per second when idle, so a single deployment can sustain steady use, but heavy days hit the cap. Real-time apps like **Telegram or X can drain the quota within a few hours** due to constant polling. To go beyond that, deploy `Code.gs` across **different Google accounts** and put all the Deployment IDs into `script_keys`.
 
-```json
-{
-  "script_keys": [
-    "FIRST_DEPLOYMENT_ID",
-    "SECOND_DEPLOYMENT_ID"
-  ]
-}
-```
-
 > ⚠️ **Label every deployment with the Google account it lives under.** The client scales its concurrency (4 poll workers per "bucket") by **distinct account labels**, not by deployment count — because Apps Script's per-second concurrency cap is also per-account. Two deployments under the same account share one quota and one bucket; two deployments under different accounts give you two buckets.
 
 ```json

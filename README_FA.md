@@ -396,15 +396,6 @@ nano client_config.json
 
 سهمیه **~۲۰٬۰۰۰ فراخوانی در روز به ازای هر اکانت گوگل** اعمال می‌شود، نه به ازای هر deployment یا پروژه — همه deploymentهای یک اکانت از یک quota مشترک استفاده می‌کنند. کلاینت در حالت بی‌کار حدود یک بار در ثانیه poll می‌کند، اما اپ‌های real-time مثل **تلگرام یا X می‌توانند quota را ظرف چند ساعت تمام کنند**. برای عبور از این محدودیت، `Code.gs` را روی **اکانت‌های مختلف گوگل** deploy کنید و همه Deployment IDها را در `script_keys` بگذارید.
 
-```json
-{
-  "script_keys": [
-    "FIRST_DEPLOYMENT_ID",
-    "SECOND_DEPLOYMENT_ID"
-  ]
-}
-```
-
 > ⚠️ **هر deployment را با اکانت گوگلی که زیرش است برچسب (`account`) بزنید.** کلاینت میزان موازی‌کاری (۴ poll worker به ازای هر «bucket») را بر اساس **برچسب‌های اکانت متمایز** تنظیم می‌کند، نه بر اساس تعداد deployment — چون per-second concurrency cap در Apps Script هم per-account است. دو deployment زیر یک اکانت در یک bucket و یک quota هستند؛ دو deployment زیر دو اکانت متفاوت = دو bucket.
 
 ```json
