@@ -356,9 +356,9 @@ pkg install wget tar -y
 
 **۲. دانلود و استخراج کلاینت:**
 ```bash
-wget https://github.com/Kianmhz/GooseRelayVPN/releases/latest/download/GooseRelayVPN-client-v1.4.1-android-arm64.tar.gz
-tar -xzvf GooseRelayVPN-client-v1.4.1-android-arm64.tar.gz
-cd GooseRelayVPN-client-v1.4.1-android-arm64/
+wget https://github.com/Kianmhz/GooseRelayVPN/releases/latest/download/GooseRelayVPN-client-v1.6.0-android-arm64.tar.gz
+tar -xzvf GooseRelayVPN-client-v1.6.0-android-arm64.tar.gz
+cd GooseRelayVPN-client-v1.6.0-android-arm64/
 chmod +x goose-client
 ```
 
@@ -396,8 +396,6 @@ nano client_config.json
 
 سهمیه **~۲۰٬۰۰۰ فراخوانی در روز به ازای هر اکانت گوگل** اعمال می‌شود، نه به ازای هر deployment یا پروژه — همه deploymentهای یک اکانت از یک quota مشترک استفاده می‌کنند. کلاینت در حالت بی‌کار حدود یک بار در ثانیه poll می‌کند، اما اپ‌های real-time مثل **تلگرام یا X می‌توانند quota را ظرف چند ساعت تمام کنند**. برای عبور از این محدودیت، `Code.gs` را روی **اکانت‌های مختلف گوگل** deploy کنید و همه Deployment IDها را در `script_keys` بگذارید.
 
-> ⚠️ **نکته نسخه v1.5.x:** فرمت برچسب‌گذاری چنداکانتی با `{ "id": "...", "account": "..." }` در نسخه‌های 1.5.x پشتیبانی نمی‌شود و ممکن است باعث کرش شود. اگر روی v1.5.x هستید، `script_keys` را به‌صورت آرایه رشته‌ای ساده بگذارید و فقط از یک اکانت گوگل استفاده کنید. این فرمت برچسب‌دار برای نسخه بعدی/بیلدهای dev است.
-
 ```json
 {
   "script_keys": [
@@ -407,7 +405,7 @@ nano client_config.json
 }
 ```
 
-> ⚠️ **هر deployment را با اکانت گوگلی که زیرش است برچسب (`account`) بزنید.** کلاینت میزان موازی‌کاری (۳ poll worker به ازای هر «bucket») را بر اساس **برچسب‌های اکانت متمایز** تنظیم می‌کند، نه بر اساس تعداد deployment — چون per-second concurrency cap در Apps Script هم per-account است. دو deployment زیر یک اکانت در یک bucket و یک quota هستند؛ دو deployment زیر دو اکانت متفاوت = دو bucket.
+> ⚠️ **هر deployment را با اکانت گوگلی که زیرش است برچسب (`account`) بزنید.** کلاینت میزان موازی‌کاری (۴ poll worker به ازای هر «bucket») را بر اساس **برچسب‌های اکانت متمایز** تنظیم می‌کند، نه بر اساس تعداد deployment — چون per-second concurrency cap در Apps Script هم per-account است. دو deployment زیر یک اکانت در یک bucket و یک quota هستند؛ دو deployment زیر دو اکانت متفاوت = دو bucket.
 
 ```json
 {
@@ -420,7 +418,7 @@ nano client_config.json
 }
 ```
 
-مثال بالا ۴ deployment روی ۲ اکانت = **۲ bucket → ۶ poll worker و ۲ long-poll همیشگی** — یعنی دو برابر موازی‌کاری و دو برابر quota روزانه نسبت به یک اکانت، بدون اینکه هیچ‌کدام را overload کند.
+مثال بالا ۴ deployment روی ۲ اکانت = **۲ bucket → ۸ poll worker و ۲ long-poll همیشگی** — یعنی دو برابر موازی‌کاری و دو برابر quota روزانه نسبت به یک اکانت، بدون اینکه هیچ‌کدام را overload کند.
 
 اگر برچسب نزنید (`["ID1", "ID2", ...]` به‌صورت رشته خالی)، همه deploymentها در یک bucket ناشناس قرار می‌گیرند — همان تعداد worker و idle slot یک deployment تنها. کلاینت موقع راه‌اندازی یک `WARN` لاگ می‌کند تا این موضوع از چشم نیفتد. فقط وقتی واقعاً همه deploymentها زیر یک اکانت هستند رشته خالی استفاده کنید؛ در غیر این صورت برچسب بزنید.
 
@@ -449,7 +447,7 @@ nano client_config.json
 | `socks_port` | `1080` | پورت SOCKS5 محلی. |
 | `google_host` | `216.239.38.120` | میزبان/IP لبه گوگل برای اتصال (پورت همیشه `443` است). |
 | `sni` | `www.google.com` | مقدار SNI در TLS. یک رشته یا آرایه می‌پذیرد — `["www.google.com", "mail.google.com", "accounts.google.com"]` — هر SNI اتصال و bucket جداگانه دارد که می‌تواند پهنای باند را در مناطقی که per-domain throttle دارند چند برابر کند. |
-| `script_keys` | — | آرایه deploymentهای Apps Script. هر entry می‌تواند یک رشته Deployment ID خالی یا یک آبجکت `{ "id": "...", "account": "..." }` با برچسب اکانت گوگل باشد. **برچسب `account` کلیدی است**: کلاینت deploymentها را بر اساس اکانت گروه‌بندی می‌کند و به ازای هر *bucket اکانت* ۳ poll worker اجرا می‌کند که با per-account concurrency cap در Apps Script منطبق است. رشته خالی (یا آبجکت بدون برچسب) همگی در یک bucket ناشناس جمع می‌شوند — فقط زمانی مناسب است که همهٔ deploymentها زیر یک اکانت گوگل باشند؛ اگر روی چند اکانت هستند برچسب بزنید وگرنه parallelism را از دست می‌دهید. **در v1.5.x فقط رشته ساده پشتیبانی می‌شود**؛ فرمت برچسب‌دار برای نسخه‌های جدیدتر است. به [افزایش ظرفیت با چند deployment](#افزایش-ظرفیت-با-چند-deployment-پیشنهاد-میشود) مراجعه کنید. |
+| `script_keys` | — | آرایه deploymentهای Apps Script. هر entry می‌تواند یک رشته Deployment ID خالی یا یک آبجکت `{ "id": "...", "account": "..." }` با برچسب اکانت گوگل باشد. **برچسب `account` کلیدی است**: کلاینت deploymentها را بر اساس اکانت گروه‌بندی می‌کند و به ازای هر *bucket اکانت* ۴ poll worker اجرا می‌کند (با بالا بردن `idle_slots_per_bucket` بیشتر هم می‌شود) که با per-account concurrency cap در Apps Script منطبق است. رشته خالی (یا آبجکت بدون برچسب) همگی در یک bucket ناشناس جمع می‌شوند — فقط زمانی مناسب است که همهٔ deploymentها زیر یک اکانت گوگل باشند؛ اگر روی چند اکانت هستند برچسب بزنید وگرنه parallelism را از دست می‌دهید. به [افزایش ظرفیت با چند deployment](#افزایش-ظرفیت-با-چند-deployment-پیشنهاد-میشود) مراجعه کنید. |
 | `tunnel_key` | — | کلید AES-256 به‌صورت hex (۶۴ کاراکتر). باید با سرور یکسان باشد. |
 | `socks_user` | *(اختیاری)* | نام کاربری SOCKS5 (RFC 1929). وقتی تنظیم شود، کلاینت‌ها باید احراز هویت کنند وگرنه اتصال رد می‌شود. باید همراه با `socks_pass` تنظیم شود — هر دو با هم یا هیچ‌کدام. |
 | `socks_pass` | *(اختیاری)* | رمز SOCKS5 متناظر با `socks_user`. |
@@ -492,7 +490,7 @@ nano client_config.json
 - **احراز هویت = تگ AES-GCM.** هیچ رمز عبور یا گواهی مشترکی نیست. فریم‌هایی که `Open()` آن‌ها fail شود بی‌صدا drop می‌شوند.
 - **Apps Script هرگز متن خام را نمی‌بیند.** اسکریپت یک forwarder ~۳۰ خطی است؛ کلید AES فقط روی کامپیوتر شما و VPS شماست.
 - **DNS از تونل عبور می‌کند.** سرور SOCKS5 از یک resolver خنثی استفاده می‌کند؛ از `socks5h://` استفاده کنید تا DNS در نقطه خروج resolve شود نه محلی.
-- **Long-poll تمام‌دوطرفه.** VPS هر درخواست را تا ۸ ثانیه باز نگه می‌دارد؛ کلاینت **۳ worker موازی به ازای هر «bucket» اکانت برچسب‌خورده** در `script_keys` اجرا می‌کند — یعنی ۱ اکانت = ۳ worker، ۲ اکانت = ۶ worker، ۳ اکانت = ۹ worker، فارغ از اینکه هر اکانت چند Deployment ID دارد. مدل bucket به این دلیل وجود دارد که per-second concurrency cap در Apps Script per-account است؛ اسکیل کردن worker بر اساس تعداد deployment باعث می‌شد کاربرانی که چند ID زیر یک اکانت دارند وسط جلسه با صفحات HTML خطای Apps Script مواجه شوند. فریم‌های downstream در یک پنجره کوچک (~۲۵ میلی‌ثانیه) coalesce می‌شوند تا برای استریم‌ها HTTP پاسخ‌های کمتر و بزرگ‌تر ساخته شود.
+- **Long-poll تمام‌دوطرفه.** VPS هر درخواست را تا ۸ ثانیه باز نگه می‌دارد؛ کلاینت **۴ worker موازی به ازای هر «bucket» اکانت برچسب‌خورده** در `script_keys` اجرا می‌کند (پیش‌فرض؛ با `idle_slots_per_bucket` می‌توان بیشتر کرد) — یعنی ۱ اکانت = ۴ worker، ۲ اکانت = ۸ worker، ۳ اکانت = ۱۲ worker، فارغ از اینکه هر اکانت چند Deployment ID دارد. مدل bucket به این دلیل وجود دارد که per-second concurrency cap در Apps Script per-account است؛ اسکیل کردن worker بر اساس تعداد deployment باعث می‌شد کاربرانی که چند ID زیر یک اکانت دارند وسط جلسه با صفحات HTML خطای Apps Script مواجه شوند. فریم‌های downstream در یک پنجره کوچک (~۲۵ میلی‌ثانیه) coalesce می‌شوند تا برای استریم‌ها HTTP پاسخ‌های کمتر و بزرگ‌تر ساخته شود.
 - **چند deployment سلامت‌محور.** وقتی `script_keys` بیش از یک deployment دارد، کلاینت endpointها را round-robin انتخاب می‌کند و هر کدام که بد رفتار کند به‌صورت نمایی blacklist می‌کند؛ یک retry در همان poll روی deployment سالم انجام می‌شود تا خطاهای موقتی ترافیک را drop نکنند.
 
 ### فرمت wire
