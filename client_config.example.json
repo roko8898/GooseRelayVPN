@@ -18,6 +18,6 @@
   "_comment_coalesce": "Optional: adaptive uplink coalescing. Set coalesce_step_ms to a positive number to make a burst of TX operations wait a little for more operations before sending, which reduces Apps Script calls. A good starting range is 20-40 ms. Set it to 0 to turn coalescing off.",
   "coalesce_step_ms": 0,
 
-  "_comment_idle_slots": "Optional download-throughput tuning. Default 1 (safe). Raise to 2 if each account has 2+ deployments and you want roughly double the download throughput; leave at 1 for accounts with one deployment. Max 3. Omitting the field is equivalent to 1.",
+  "_comment_idle_slots": "Optional download-throughput tuning. Default 1 (safe). Raise to 2 if each account has 2+ deployments — this may increase download throughput; leave at 1 for accounts with one deployment. Max 3. Omitting the field is equivalent to 1.",
   "idle_slots_per_bucket": 1
 }
